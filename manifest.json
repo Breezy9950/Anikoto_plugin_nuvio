@@ -1,7 +1,7 @@
 {
   "name":"AniKoto-Nuvio",
-  "version":"1.2.1",
-  "description":"AniKoto, AnimeOnsen and AniZone anime streams using TMDB-to-MAL episode mapping",
+  "version":"1.3.0",
+  "description":"AniKoto, AniKoto AniBridge, AnimeOnsen and AniZone anime streams",
   "scrapers":[
     {
       "id":"anikoto",
@@ -10,6 +10,19 @@
       "version":"1.0.0",
       "author":"Nuvio Team",
       "filename":"providers/anikoto.js",
+      "supportedTypes":["tv"],
+      "enabled":true,
+      "formats":["m3u8"],
+      "logo":"https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
+      "contentLanguage":["en","ja"]
+    },
+    {
+      "id":"anikoto-anibridge",
+      "name":"AniKoto AniBridge",
+      "description":"AniKoto multi-server anime streams using AniBridge TMDB-to-MAL episode mapping",
+      "version":"1.0.0",
+      "author":"Nuvio Team",
+      "filename":"providers/anikoto-anibridge.js",
       "supportedTypes":["tv"],
       "enabled":true,
       "formats":["m3u8"],
