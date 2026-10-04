@@ -4,11 +4,7 @@ const CryptoJS=require("crypto-js");
 const ANIKOTO_URL="https://anikototv.to";
 const AJAX_URL=`${ANIKOTO_URL}/ajax`;
 const MAPPER_URL="https://mapper.nekostream.site";
-const ANIBRIDGE_URL="https://github.com/anibridge/anibridge-mappings/releases/download/v3/mappings.min.json";
-const ANILIST_URL="https://graphql.anilist.co";
-const ANIBRIDGE_CHUNK_SIZE=900000;
-const ANIBRIDGE_CACHE_TTL=86400000;
-let ANIBRIDGE_DATA=null,ANIBRIDGE_LOADED=0;
+const ANIBRIDGE_MAPPING_URL="https://breezy-plugins.netlify.app/.netlify/functions/anibridge-mapping";
 const USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const ANIKOTO_HEADERS={
   "Referer":`${ANIKOTO_URL}/`,
@@ -71,206 +67,54 @@ function parsePositiveInt(value){
   return Number.isInteger(n)&&n>0?n:null;
 }
 
-async function loadAniBridge(){
-  if(ANIBRIDGE_DATA&&Date.now()-ANIBRIDGE_LOADED<ANIBRIDGE_CACHE_TTL)return ANIBRIDGE_DATA;
-  const parts=[];
-  let start=0,total=null;
-  log("Loading AniBridge mappings from GitHub in chunks");
-  while(total===null||start<total){
-    const end=start+ANIBRIDGE_CHUNK_SIZE-1;
-    try{
-      const res=await fetchWithTimeout(ANIBRIDGE_URL,{
-        headers:{
-          "Accept":"application/json",
-          "User-Agent":USER_AGENT,
-          "Range":`bytes=${start}-${end}`
-        }
-      },30000);
-      if(!res.ok)throw new Error(`HTTP ${res.status}`);
-      const range=res.headers?.get("content-range")||res.headers?.get("Content-Range")||"";
-      const match=range.match(/bytes\s+(\d+)-(\d+)\/(\d+)/i);
-      if(!match)throw new Error("GitHub did not return Content-Range for Range request");
-      const rangeStart=Number(match[1]);
-      const rangeEnd=Number(match[2]);
-      const rangeTotal=Number(match[3]);
-      if(rangeStart!==start)throw new Error(`Unexpected range start ${rangeStart}, expected ${start}`);
-      total=rangeTotal;
-      const part=await res.text();
-      if(!part)throw new Error("Empty AniBridge chunk");
-      parts.push(part);
-      start=rangeEnd+1;
-      log(`AniBridge chunk ${rangeStart}-${rangeEnd}/${total}`);
-      if(part.length!==rangeEnd-rangeStart+1&&start<total){
-        log(`AniBridge UTF/text length differs from byte range: ${part.length}/${rangeEnd-rangeStart+1}`);
-      }
-    }catch(error){
-      log(`AniBridge chunk load failed at ${start}: ${error.message}`);
-      throw error;
-    }
-  }
-  const text=parts.join("");
-  log(`AniBridge download complete: ${text.length} chars`);
-  ANIBRIDGE_DATA=JSON.parse(text);
-  ANIBRIDGE_LOADED=Date.now();
-  return ANIBRIDGE_DATA;
-}
+async function getMapping(tmdbId,season,episode){
+  const url=`${ANIBRIDGE_MAPPING_URL}?tmdbId=${encodeURIComponent(tmdbId)}&season=${encodeURIComponent(season)}&episode=${encodeURIComponent(episode)}`;
 
-function parseRangePart(value){
-  const s=String(value||"").trim();
-  if(!s)return null;
-  const m=s.match(/^(\d+)(?:-(\d+))?$/);
-  if(!m)return null;
-  return{start:Number(m[1]),end:Number(m[2]||m[1])};
-}
+  log(`AniBridge mapping TMDB=${tmdbId} S${season}E${episode}`);
 
-function resolveMappedEpisode(table,episode){
-  if(!table||typeof table!=="object")return null;
-  const wanted=Number(episode);
-  for(const sourceRange of Object.keys(table)){
-    const sourceParts=String(sourceRange).split(",").map(parseRangePart).filter(Boolean);
-    for(const source of sourceParts){
-      if(wanted<source.start||wanted>source.end)continue;
-      const targetRaw=table[sourceRange];
-      const targetParts=String(targetRaw??"").split(",").map(parseRangePart).filter(Boolean);
-      if(!targetParts.length)continue;
-      const offset=wanted-source.start;
-      let count=0;
-      for(const target of targetParts){
-        const length=target.end-target.start+1;
-        if(offset<count+length)return target.start+(offset-count);
-        count+=length;
-      }
-    }
-  }
-  return null;
-}
-
-async function getAniListMeta(id){
-  try{
-    const body=await getJson(ANILIST_URL,{
-      method:"POST",
-      headers:{
-        "Content-Type":"application/json",
+  const body=await getJson(
+    url,
+    {
+      "headers":{
         "Accept":"application/json",
         "User-Agent":USER_AGENT
-      },
-      body:JSON.stringify({
-        query:"query($id:Int){Media(id:$id,type:ANIME){id,idMal,title{romaji,english,native}}}",
-        variables:{id:Number(id)}
-      })
-    },10000);
-    const media=body?.data?.Media;
-    if(!media)return null;
-    return{
-      malId:media.idMal?String(media.idMal):null,
-      title:String(media.title?.english||media.title?.romaji||media.title?.native||"").trim(),
-      titles:[media.title?.english,media.title?.romaji,media.title?.native].filter(Boolean).map(String)
-    };
-  }catch(error){
-    log(`AniList metadata failed: ${error.message}`);
+      }
+    },
+    10000
+  );
+
+  if(!body?.ok||!body.mapping){
+    log(`AniBridge mapping miss TMDB=${tmdbId} S${season}E${episode}`);
     return null;
   }
-}
 
-async function getMapping(tmdbId,season,episode){
-  log(`AniBridge mapping TMDB=${tmdbId} S${season}E${episode}`);
-  try{
-    const data=await loadAniBridge();
-    const key=`tmdb_show:${tmdbId}:s${season}`;
-    const source=data?.[key];
-    if(!source){
-      log(`AniBridge source not found: ${key}`);
-      return null;
-    }
+  const mapping=body.mapping;
 
-    let malId=null,malEpisode=null,anilistId=null;
+  const malId=String(
+    mapping.malId||
+    mapping.mal_id||
+    ""
+  ).trim();
 
-    for(const descriptor of Object.keys(source)){
-      const lower=descriptor.toLowerCase();
-      const target=source[descriptor];
+  const malEpisode=parsePositiveInt(
+    mapping.malEpisode||
+    mapping.mal_episode||
+    mapping.target_episode
+  );
 
-      if(lower.startsWith("mal:")){
-        const id=descriptor.split(":")[1];
-        const mapped=resolveMappedEpisode(target,episode);
-        if(id&&mapped!==null){
-          malId=String(id);
-          malEpisode=mapped;
-          break;
-        }
-      }
-    }
-
-    if(!malId){
-      for(const descriptor of Object.keys(source)){
-        const lower=descriptor.toLowerCase();
-        if(!lower.startsWith("anilist:"))continue;
-
-        const id=descriptor.split(":")[1];
-        const mapped=resolveMappedEpisode(source[descriptor],episode);
-
-        if(id&&mapped!==null){
-          anilistId=String(id);
-          const meta=await getAniListMeta(anilistId);
-
-          if(meta?.malId){
-            malId=meta.malId;
-            malEpisode=mapped;
-            return{
-              malId,
-              malEpisode,
-              title:meta.title,
-              titles:meta.titles
-            };
-          }
-        }
-      }
-    }
-
-    if(!malId){
-      log(`AniBridge no MAL mapping for ${key} E${episode}`);
-      return null;
-    }
-
-    let title="",titles=[];
-
-    if(anilistId){
-      const meta=await getAniListMeta(anilistId);
-      if(meta){
-        title=meta.title||"";
-        titles=meta.titles||[];
-      }
-    }else{
-      for(const descriptor of Object.keys(source)){
-        if(!descriptor.toLowerCase().startsWith("anilist:"))continue;
-
-        const id=descriptor.split(":")[1];
-        const mapped=resolveMappedEpisode(source[descriptor],episode);
-
-        if(id&&mapped!==null){
-          const meta=await getAniListMeta(id);
-          if(meta){
-            title=meta.title||"";
-            titles=meta.titles||[];
-          }
-          break;
-        }
-      }
-    }
-
-    if(!title)title=String(tmdbId);
-
-    log(`AniBridge hit TMDB=${tmdbId} S${season}E${episode} -> MAL=${malId} E${malEpisode}`);
-
-    return{
-      malId,
-      malEpisode,
-      title,
-      titles
-    };
-  }catch(error){
-    log(`AniBridge mapping failed: ${error.message}`);
+  if(!malId||!malEpisode){
+    log("AniBridge response did not contain a valid MAL id/episode");
     return null;
   }
+
+  return{
+    malId,
+    malEpisode,
+    title:String(mapping.title||mapping.anime_title||"").trim(),
+    titles:Array.isArray(mapping.titles)?
+      mapping.titles.filter(Boolean).map(String):
+      []
+  };
 }
 
 async function searchAnime(query){
