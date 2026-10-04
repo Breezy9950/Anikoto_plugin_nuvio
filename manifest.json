@@ -17,19 +17,6 @@
       "contentLanguage":["en","ja"]
     },
     {
-      "id":"anikoto-anizip",
-      "name":"AniKoto Anizip",
-      "description":"AniKoto multi-server anime streams using AniBridge TMDB-to-MAL episode mapping",
-      "version":"1.0.0",
-      "author":"Nuvio Team",
-      "filename":"providers/anikoto-anizip.js",
-      "supportedTypes":["tv", "movie"],
-      "enabled":true,
-      "formats":["m3u8"],
-      "logo":"https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
-      "contentLanguage":["en","ja"]
-    },
-    {
       "id":"animeonsen",
       "name":"AnimeOnsen",
       "description":"AnimeOnsen direct DASH anime streams using TMDB-to-MAL episode mapping",
