@@ -10,5 +10,3 @@
 [functions."anime-mapping-updater"]
   schedule = "@daily"
 
-[functions."anibridge-updater"]
-schedule = "@daily"
