@@ -1,15 +1,20 @@
-[
-  {
-    "id":"anikoto",
-    "name":"AniKoto",
-    "description":"AniKoto multi-server anime streams using TMDB-to-MAL episode mapping",
-    "version":"1.0.1",
-    "author":"Nuvio Team",
-    "supportedTypes":["tv"],
-    "filename":"providers/anikoto.js",
-    "enabled":true,
-    "formats":["m3u8"],
-    "logo":"https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
-    "contentLanguage":["en","ja"]
-  }
-]
+{
+  "name":"AniKoto-Nuvio",
+  "version":"1.0.0",
+  "description":"AniKoto multi-server anime streams using TMDB-to-MAL episode mapping",
+  "scrapers":[
+    {
+      "id":"anikoto",
+      "name":"AniKoto",
+      "description":"AniKoto multi-server anime streams using TMDB-to-MAL episode mapping",
+      "version":"1.0.0",
+      "author":"Nuvio Team",
+      "filename":"providers/anikoto.js",
+      "supportedTypes":["tv"],
+      "enabled":true,
+      "formats":["m3u8"],
+      "logo":"https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
+      "contentLanguage":["en","ja"]
+    }
+  ]
+}
