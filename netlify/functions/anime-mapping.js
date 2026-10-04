@@ -127,6 +127,7 @@ mappingType:seasonMapping&&seasonMapping.mappingType||"range"
 };
 }
 exports.handler=async event=>{
+console.log("[ANIME MAPPING] REQUEST RECEIVED",event.queryStringParameters||{});
 const started=Date.now();
 try{
 const method=(event.httpMethod||"GET").toUpperCase();
