@@ -1,6 +1,6 @@
 {
   "name":"AniKoto-Nuvio",
-  "version":"1.2.0",
+  "version":"1.2.1",
   "description":"AniKoto, AnimeOnsen and AniZone anime streams using TMDB-to-MAL episode mapping",
   "scrapers":[
     {
