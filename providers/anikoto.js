@@ -94,7 +94,7 @@ async function searchAnime(query){
   const url=`${AJAX_URL}/anime/search?keyword=${encodeURIComponent(query)}`;
   const body=await getJson(url,{"headers":HEADERS},10000);
   const html=body?.result?.html;
-  if(!html)return[];
+  if(!html){log(`Search returned no HTML for "${query}"`);return[];}
   const $=cheerio.load(html);
   const results=[];
   $("div.scaff.items").children().each((_,item)=>{
@@ -106,6 +106,7 @@ async function searchAnime(query){
       results.push({title,url:new URL(href,ANIKOTO_URL).href,image});
     }
   });
+  log(`Search "${query}" -> ${results.length} results`);
   return results;
 }
 
@@ -137,28 +138,24 @@ async function getEpisodeList(animeUrl){
   if(!html)return null;
   const doc=cheerio.load(html);
   const episodes=[];
-  doc.querySelectorAll("div.episodes > *").forEach(range=>{
-    range.children.forEach(node=>{
-      if(node.type!=="tag")return;
-      const a=node.querySelector("a");
-      if(!a)return;
-      const attrs=a.attribs||{};
-      const href=attrs.href?new URL(attrs.href,ANIKOTO_URL).href:null;
-      const episodeId=attrs["data-ids"]?.trim();
-      const malId=attrs["data-mal"]?.trim();
-      const number=parsePositiveInt(attrs["data-num"]);
-      if(!number)return;
-      episodes.push({
-        episodeId,
-        href,
-        malId:malId||null,
-        episodeNumber:number,
-        title:attrs.title?.trim()||"",
-        dub:attrs["data-dub"]==="1",
-        filler:String(attrs.class||"").split(/\s+/).includes("filler")
-      });
+  doc("div.episodes a").each((_,a)=>{
+    const el=doc(a);
+    const episodeId=el.attr("data-ids")?.trim();
+    const href=el.attr("href")?new URL(el.attr("href"),ANIKOTO_URL).href:null;
+    const malId=el.attr("data-mal")?.trim();
+    const number=parsePositiveInt(el.attr("data-num"));
+    if(!number)return;
+    episodes.push({
+      episodeId,
+      href,
+      malId:malId||null,
+      episodeNumber:number,
+      title:el.attr("title")?.trim()||"",
+      dub:el.attr("data-dub")==="1",
+      filler:String(el.attr("class")||"").split(/\s+/).includes("filler")
     });
   });
+  log(`Episode list parsed: ${episodes.length}`);
   return episodes;
 }
 
@@ -175,9 +172,11 @@ async function findAnimeEpisode(mapping){
     queries
   );
   for(const candidate of candidates.slice(0,10)){
+    log(`Checking candidate "${candidate.title}"`);
     const episodes=await getEpisodeList(candidate.url);
-    if(!episodes?.length)continue;
+    if(!episodes?.length){log(`No episodes for candidate "${candidate.title}"`);continue;}
     const exact=episodes.find(ep=>ep.malId===mapping.malId&&ep.episodeNumber===mapping.malEpisode);
+    if(!exact)log(`No exact MAL=${mapping.malId} E${mapping.malEpisode} match in ${episodes.length} episodes`);
     if(exact?.episodeId){
       log(`Matched "${candidate.title}" MAL=${mapping.malId} E${mapping.malEpisode}`);
       return{candidate,episode:exact,episodes};
@@ -412,6 +411,7 @@ async function extractStream(streamUrl,server){
 
 async function fetchStreamsForEpisode(episodeId,malId,malEpisode,dub){
   const servers=await getServerLinks(episodeId,dub);
+  log(`Server list: ${servers.length} servers for episode ${episodeId}`);
   if(!servers.length)return[];
   const kiwiPromise=getKiwiStreamId(malId,malEpisode).catch(error=>{
     log(`Kiwi mapper failed: ${error.message}`);
@@ -429,8 +429,10 @@ async function fetchStreamsForEpisode(episodeId,malId,malEpisode,dub){
   for(const server of servers){
     try{
       const streamUrl=await getServerUrl(server.linkId);
-      if(!streamUrl)continue;
+      if(!streamUrl){log(`No stream URL for server ${server.name}`);continue;}
+      log(`Server ${server.name} -> ${streamUrl}`);
       const extracted=await extractStream(streamUrl,server.name);
+      log(`Extractor ${server.name} -> ${extracted.length} streams`);
       if(extracted.length)streams.push(...extracted);
     }catch(error){
       log(`Server ${server.name} failed: ${error.message}`);
