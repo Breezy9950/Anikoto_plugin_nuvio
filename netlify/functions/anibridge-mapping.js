@@ -5,7 +5,7 @@ const META_KEY="meta";
 const SHARDS=16;
 
 function log(...x){console.log("[ANIBRIDGE MAPPING]",...x)}
-function json(x,status=200){return new Response(JSON.stringify(x),{status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Cache-Control":"public,max-age=300"}})}
+function json(x,status=200){return{statusCode:status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Cache-Control":"public,max-age=300"},body:JSON.stringify(x)}}
 function shardFor(provider,id){let n=Number(id)||0,p=provider==="tmdb_show"?1:provider==="tmdb_movie"?2:provider==="mal"?3:4;return(Math.abs(n)*31+p)%SHARDS}
 function num(v){const n=Number(v);return Number.isInteger(n)&&n>0?n:null}
 function range(s){
@@ -66,10 +66,11 @@ exports.handler=async(event)=>{
   if(!allowed.has(provider))return json({ok:false,error:"unsupported provider"},400);
 
   try{
-const store=getStore(STORE_NAME,{
-  siteID:process.env.NETLIFY_SITE_ID,
-  token:process.env.NETLIFY_AUTH_TOKEN
-});
+    const store=getStore(STORE_NAME,{
+      siteID:process.env.NETLIFY_SITE_ID,
+      token:process.env.NETLIFY_AUTH_TOKEN
+    });
+
     const meta=await store.get(META_KEY,{type:"json"});
 
     if(!meta?.activeVersion){
