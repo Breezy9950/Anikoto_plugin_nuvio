@@ -1,7 +1,7 @@
 {
   "name":"AniKoto-Nuvio",
-  "version":"1.1.0",
-  "description":"AniKoto and AnimeOnsen anime streams using TMDB-to-MAL episode mapping",
+  "version":"1.2.0",
+  "description":"AniKoto, AnimeOnsen and AniZone anime streams using TMDB-to-MAL episode mapping",
   "scrapers":[
     {
       "id":"anikoto",
@@ -27,6 +27,19 @@
       "enabled":true,
       "formats":["mpd"],
       "logo":"https://www.google.com/s2/favicons?domain=animeonsen.xyz&sz=128",
+      "contentLanguage":["en","ja"]
+    },
+    {
+      "id":"anizone",
+      "name":"AniZone",
+      "description":"AniZone anime streams using TMDB-to-MAL episode mapping",
+      "version":"1.0.0",
+      "author":"Nuvio Team",
+      "filename":"providers/anizone.js",
+      "supportedTypes":["tv"],
+      "enabled":true,
+      "formats":["m3u8"],
+      "logo":"https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
       "contentLanguage":["en","ja"]
     }
   ]
