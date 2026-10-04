@@ -79,7 +79,11 @@ const indexBytes=Buffer.byteLength(indexJson,"utf8");
 log(`Index built tvdbIds=${entryCount} bytes=${indexBytes}`);
 if(!entryCount)throw new Error("Shinkro dataset produced an empty index");
 if(indexBytes>MAX_INDEX_BYTES)throw new Error(`Generated Shinkro index exceeds ${MAX_INDEX_BYTES} byte safety limit`);
-const store=getStore({name:STORE_NAME});
+const store=getStore({
+  name:STORE_NAME,
+  siteID:process.env.NETLIFY_SITE_ID,
+  token:process.env.NETLIFY_AUTH_TOKEN
+});
 await store.setJSON(INDEX_KEY,index);
 log(`Blob write SUCCESS ${INDEX_KEY}`);
 log(`Updater SUCCESS source=${sourceBytes}B index=${indexBytes}B time=${Date.now()-started}ms`);
