@@ -107,14 +107,17 @@ async function kiwi(mal,ep){
 
 async function serverLinks(id,dub){
   const d=await json(AJAX_URL+"/server/list?servers="+encodeURIComponent(id),{headers:HEADERS}),h=d&&d.result;if(!h)return[];
-  const r=parseHTML(h),out=[];
+  const r=parseHTML(h),out=[],seen=new Set();
   for(const g of all(r,"div.servers")){
     const types=all(g,"div.type");
     for(const t of types){
       if((val(t,"data-type")==="dub")!==dub)continue;
       for(const x of all(t,"li")){
         const link=val(x,"data-link-id");
-        if(link)out.push({name:nodeText(x)||"Unknown",linkId:link,groupName:nodeText(t).replace(nodeText(x),"").trim()})
+        if(link&&!seen.has(link)){
+          seen.add(link);
+          out.push({name:nodeText(x)||"Unknown",linkId:link,groupName:nodeText(t).replace(nodeText(x),"").trim()})
+        }
       }
     }
   }
@@ -267,7 +270,7 @@ function sourceFile(r){
 function signMegaplay(u){
   try{
     const x=new URL(u),m=x.pathname.match(/\/([a-f0-9]{32})\/([a-f0-9]{32})\//i);if(!m)return u;
-    const p=utf8enc(Math.floor(Date.now()/1000)+90+"|"+m[1].toLowerCase()+"/"+m[2].toLowerCase()),sig=hmac256("MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s",p),q=x.search?x.search+"&":"?";
+    const p=utf8enc(Math.floor(Date.now()/1000)+300+"|"+m[1].toLowerCase()+"/"+m[2].toLowerCase()),sig=hmac256("MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s",p),q=x.search?x.search+"&":"?";
     return x.href.split("?")[0]+q+"token="+b64url(p)+"."+b64url(sig)
   }catch(e){log("Megaplay signing failed: "+e.message);return u}
 }
@@ -326,13 +329,18 @@ async function extract(u,server){
 
 async function streamsForEpisode(id,mal,ep,dub){
   const kp=kiwi(mal,ep).catch(()=>null),servers=await serverLinks(id,dub),kd=await kp;
-  if(kd&&kd.sub&&kd.sub.url)servers.push({name:"Kiwi",linkId:String(kd.sub.url),groupName:"Kiwi"});
+  if(kd&&kd.sub&&kd.sub.url&&!servers.some(x=>x.linkId===String(kd.sub.url)))servers.push({name:"Kiwi",linkId:String(kd.sub.url),groupName:"Kiwi"});
   if(!servers.length)return[];
-  const out=[];
+  const out=[],seen=new Set(),seenUrls=new Set();
   for(const s of servers){
     try{
-      const u=await serverUrl(s.linkId);if(!u)continue;
-      const got=await extract(u,s.name);if(got.length)out.push(...got)
+      const u=await serverUrl(s.linkId);if(!u||seen.has(u))continue;
+      seen.add(u);
+      const got=await extract(u,s.name);
+      for(const x of got){
+        const key=String(x&&x.url||"").trim();
+        if(key&&!seenUrls.has(key)){seenUrls.add(key);out.push(x)}
+      }
     }catch(e){log("Server "+s.name+" failed: "+e.message)}
   }
   return out
@@ -350,7 +358,6 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     log("AniBridge TMDB="+id+" S"+s+"E"+e+" -> MAL="+(m.malId||"-")+" E"+(m.malEpisode||"-")+" AniList="+(m.anilistId||"-")+" E"+(m.anilistEpisode||"-"));
 
     let titles=await getAniListTitles(m.anilistId);
-
     if(!titles.length&&m.malId){
       const jt=await getJikanTitles(m.malId);
       if(jt.length)titles=jt
