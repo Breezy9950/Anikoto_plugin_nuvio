@@ -3,139 +3,123 @@ const{getStore}=require("@netlify/blobs");
 const STORE_NAME="anibridge-mapping";
 const META_KEY="meta";
 const SOURCE_URL="https://github.com/anibridge/anibridge-mappings/releases/download/v3/mappings.min.json";
-const SHARDS=64;
+const SHARDS=16;
 const REFRESH_MS=48*60*60*1000;
-const USER_AGENT="AniKoto-Nuvio/AniBridge-Updater";
+const UA="AniKoto-Nuvio/AniBridge-Updater";
+const KEEP=new Set(["tmdb_show","tmdb_movie","mal","anilist"]);
 
 function log(...x){console.log("[ANIBRIDGE UPDATER]",...x)}
-function shardFor(provider,id){let n=Number(id);if(!Number.isFinite(n))n=0;let p=provider==="tmdb_show"?1:provider==="mal"?2:provider==="anilist"?3:7;return(Math.abs(n)*31+p)%SHARDS}
-function parseDescriptor(s){
-  const m=String(s||"").match(/^(anidb|anilist|imdb_movie|imdb_show|mal|tmdb_show|tmdb_movie|tvdb_show):([^:]+)(?::(.+))?$/);
+function shardFor(provider,id){let n=Number(id)||0,p=provider==="tmdb_show"?1:provider==="tmdb_movie"?2:provider==="mal"?3:4;return(Math.abs(n)*31+p)%SHARDS}
+function descriptor(s){
+  const m=String(s||"").match(/^(tmdb_show|tmdb_movie|mal|anilist):([^:]+)(?::(.+))?$/);
   return m?{provider:m[1],id:m[2],scope:m[3]||null}:null;
 }
-function normalizeRanges(targets){
+function normalizeTargets(map){
   const out=[];
-  for(const[targetKey,ranges]of Object.entries(targets||{})){
-    const t=parseDescriptor(targetKey);
-    if(!t)continue;
+  for(const[k,ranges]of Object.entries(map||{})){
+    const d=descriptor(k);
+    if(!d)continue;
     const rr=[];
-    for(const[sourceRange,targetRange]of Object.entries(ranges||{})){
-      if(typeof targetRange!=="string")continue;
-      rr.push([sourceRange,targetRange]);
+    for(const[a,b]of Object.entries(ranges||{})){
+      if(typeof b==="string")rr.push([a,b]);
     }
-    if(rr.length)out.push({provider:t.provider,id:t.id,scope:t.scope,ranges:rr});
+    if(rr.length)out.push({provider:d.provider,id:d.id,scope:d.scope,ranges:rr});
   }
   return out;
 }
-function addRecord(shards,descriptor,targets){
-  const d=parseDescriptor(descriptor);
-  if(!d||!targets.length)return false;
-  const key=descriptor;
-  const shard=shards[shardFor(d.provider,d.id)];
-  if(!shard[key])shard[key]={provider:d.provider,id:d.id,scope:d.scope,targets:[]};
-  for(const t of targets){
-    const exists=shard[key].targets.find(x=>x.provider===t.provider&&x.id===t.id&&x.scope===t.scope);
-    if(exists){
-      for(const r of t.ranges)exists.ranges.push(r);
-    }else shard[key].targets.push({provider:t.provider,id:t.id,scope:t.scope,ranges:t.ranges.slice()});
-  }
-  return true;
-}
-
-function buildIndex(source){
+function build(source){
   const shards=Array.from({length:SHARDS},()=>({}));
-  let descriptors=0,tmdb=0,mal=0,anilist=0,targets=0,ranges=0;
-  for(const[sourceDescriptor,targetMap]of Object.entries(source||{})){
-    const targetList=normalizeRanges(targetMap);
-    if(!targetList.length)continue;
-    if(addRecord(shards,sourceDescriptor,targetList)){
-      descriptors++;
-      const d=parseDescriptor(sourceDescriptor);
-      if(d.provider==="tmdb_show"||d.provider==="tmdb_movie")tmdb++;
-      if(d.provider==="mal")mal++;
-      if(d.provider==="anilist")anilist++;
-      targets+=targetList.length;
-      ranges+=targetList.reduce((n,x)=>n+x.ranges.length,0);
+  let descriptors=0,targets=0,ranges=0;
+  for(const[sourceKey,targetMap]of Object.entries(source||{})){
+    const s=descriptor(sourceKey);
+    if(!s)continue;
+    const targetsForSource=normalizeTargets(targetMap).filter(x=>KEEP.has(x.provider));
+    if(!targetsForSource.length)continue;
+    const shard=shards[shardFor(s.provider,s.id)];
+    const rec=shard[sourceKey]||(shard[sourceKey]={provider:s.provider,id:s.id,scope:s.scope,targets:[]});
+    for(const t of targetsForSource){
+      const old=rec.targets.find(x=>x.provider===t.provider&&x.id===t.id&&x.scope===t.scope);
+      if(old)old.ranges.push(...t.ranges);
+      else rec.targets.push({provider:t.provider,id:t.id,scope:t.scope,ranges:t.ranges});
+      targets++;
+      ranges+=t.ranges.length;
     }
+    descriptors++;
   }
-  return{shards,descriptors,tmdb,mal,anilist,targets,ranges};
+  return{shards,descriptors,targets,ranges};
 }
 
 exports.handler=async()=>{
   const started=Date.now();
   log("========================================");
   log("Updater START");
-  log("Source:",SOURCE_URL);
   try{
     const store=getStore(STORE_NAME);
     const oldMeta=await store.get(META_KEY,{type:"json"});
+
     if(oldMeta?.updatedAt&&Date.now()-Number(oldMeta.updatedAt)<REFRESH_MS){
-      log(`SKIP active mapping age=${Date.now()-Number(oldMeta.updatedAt)}ms`);
+      log(`SKIP mapping age=${Date.now()-Number(oldMeta.updatedAt)}ms`);
       return;
     }
 
-    const res=await fetch(SOURCE_URL,{headers:{Accept:"application/json","User-Agent":USER_AGENT}});
-    log(`Source response HTTP ${res.status} ok=${res.ok}`);
-    if(!res.ok)throw new Error(`AniBridge source HTTP ${res.status}`);
+    const res=await fetch(SOURCE_URL,{headers:{Accept:"application/json","User-Agent":UA}});
+    log(`Source HTTP ${res.status} ok=${res.ok}`);
+    if(!res.ok)throw new Error(`AniBridge HTTP ${res.status}`);
 
     const text=await res.text();
-    log(`Source downloaded bytes=${text.length}`);
-    if(text.length<1000)throw new Error("AniBridge source unexpectedly small");
+    log(`Downloaded bytes=${text.length}`);
+    if(text.length<100000)throw new Error("AniBridge source unexpectedly small");
 
     const source=JSON.parse(text);
-    const built=buildIndex(source);
+    const built=build(source);
 
-    log(`Built descriptors=${built.descriptors} tmdb=${built.tmdb} mal=${built.mal} anilist=${built.anilist} targets=${built.targets} ranges=${built.ranges}`);
+    log(`Built descriptors=${built.descriptors} targets=${built.targets} ranges=${built.ranges}`);
 
-    if(!built.tmdb)throw new Error("No TMDB mappings found");
-    if(!built.mal&&!built.anilist)throw new Error("No MAL/AniList mappings found");
+    if(!built.descriptors)throw new Error("No TMDB/MAL/AniList descriptors found");
 
     const version=String(Date.now());
     const prefix=`v${version}`;
-    let bytes=0;
+    const payloads=built.shards.map((x,i)=>({i,payload:JSON.stringify(x)}));
 
-    for(let i=0;i<SHARDS;i++){
-      const payload=JSON.stringify(built.shards[i]);
-      bytes+=payload.length;
+    await Promise.all(payloads.map(async({i,payload})=>{
       await store.set(`${prefix}/shard-${i}`,payload,{contentType:"application/json"});
-      log(`Shard ${i+1}/${SHARDS} written bytes=${payload.length}`);
-    }
+      log(`Shard ${i+1}/${SHARDS} ${payload.length}B`);
+    }));
 
-    const testShard=built.shards[shardFor("tmdb_show","285993")];
-    if(!testShard||typeof testShard!=="object")throw new Error("Shard verification failed");
+    const verifyIndex=shardFor("tmdb_show","285993");
+    const verified=await store.get(`${prefix}/shard-${verifyIndex}`,{type:"json"});
+    if(!verified||typeof verified!=="object")throw new Error("New mapping verification failed");
 
-    const newMeta={
+    const meta={
       activeVersion:version,
       updatedAt:Date.now(),
       source:SOURCE_URL,
       shards:SHARDS,
       descriptors:built.descriptors,
-      tmdbDescriptors:built.tmdb,
-      malDescriptors:built.mal,
-      anilistDescriptors:built.anilist,
       targets:built.targets,
-      ranges:built.ranges,
-      bytes
+      ranges:built.ranges
     };
 
-    await store.setJSON(META_KEY,newMeta);
-    log(`ACTIVE VERSION switched to ${version}`);
+    await store.setJSON(META_KEY,meta);
+    log(`ACTIVE VERSION=${version}`);
 
     if(oldMeta?.activeVersion&&oldMeta.activeVersion!==version){
-      for(let i=0;i<SHARDS;i++){
-        try{await store.delete(`v${oldMeta.activeVersion}/shard-${i}`)}catch{}
-      }
-      log(`Old version ${oldMeta.activeVersion} removed`);
+      await Promise.all(
+        Array.from({length:SHARDS},(_,i)=>
+          store.delete(`v${oldMeta.activeVersion}/shard-${i}`).catch(()=>{})
+        )
+      );
+      log(`Old version removed=${oldMeta.activeVersion}`);
     }
 
-    log(`Updater SUCCESS bytes=${bytes} time=${Date.now()-started}ms`);
+    log(`SUCCESS time=${Date.now()-started}ms`);
     log("========================================");
   }catch(e){
     log("FATAL:",e?.stack||e);
-    log("Old mapping remains active.");
+    log("OLD VERSION LEFT INTACT");
     log("========================================");
     throw e;
   }
 };
 
-exports.config={schedule:"0 0 * * *"};
+exports.config={schedule:"@daily"};
