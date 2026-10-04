@@ -4,7 +4,7 @@ const crypto=require("crypto");
 const ANIKOTO_URL="https://anikototv.to";
 const AJAX_URL=`${ANIKOTO_URL}/ajax`;
 const MAPPER_URL="https://mapper.nekostream.site";
-const MAPPING_URL="https://breezy-plugins.netlify.app/.netlify/functions/anime-mapping";
+const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping";
 const HEADERS={
   "User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   "Referer":`${ANIKOTO_URL}/`,
