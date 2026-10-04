@@ -2,143 +2,129 @@ const{getStore}=require("@netlify/blobs");
 
 const STORE_NAME="anibridge-mapping";
 const META_KEY="meta";
-const SHARDS=64;
-const USER_AGENT="AniKoto-Nuvio/AniBridge";
+const SHARDS=16;
 
 function log(...x){console.log("[ANIBRIDGE MAPPING]",...x)}
-function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Cache-Control":"public,max-age=300"}})}
-function shardFor(provider,id){let n=Number(id);if(!Number.isFinite(n))n=0;let p=provider==="tmdb_show"?1:provider==="mal"?2:provider==="anilist"?3:7;return(Math.abs(n)*31+p)%SHARDS}
-function parseIntSafe(v){const n=Number(v);return Number.isInteger(n)&&n>0?n:null}
-function parseRange(s){
+function json(x,status=200){return new Response(JSON.stringify(x),{status,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*","Cache-Control":"public,max-age=300"}})}
+function shardFor(provider,id){let n=Number(id)||0,p=provider==="tmdb_show"?1:provider==="tmdb_movie"?2:provider==="mal"?3:4;return(Math.abs(n)*31+p)%SHARDS}
+function num(v){const n=Number(v);return Number.isInteger(n)&&n>0?n:null}
+function range(s){
   const m=String(s||"").trim().match(/^(\d+)(?:-(\d*))?$/);
   if(!m)return null;
-  const start=Number(m[1]),end=m[2]===""?Infinity:(m[2]?Number(m[2]):start);
-  if(!Number.isInteger(start)||start<1||(!Number.isFinite(end)&&end!==Infinity)||end<start)return null;
-  return{start,end};
+  const a=Number(m[1]),b=m[2]===""?Infinity:(m[2]?Number(m[2]):a);
+  if(a<1||b<a)return null;
+  return{a,b};
 }
-function splitTarget(s){
+function targetParts(s){
   let raw=String(s||"").trim(),ratio=1;
-  const rm=raw.match(/\|(-?\d+(?:\.\d+)?)$/);
-  if(rm){ratio=Number(rm[1]);raw=raw.slice(0,-rm[0].length)}
-  if(!Number.isFinite(ratio)||ratio===0)return null;
-  const parts=raw.split(",").map(x=>parseRange(x)).filter(Boolean);
+  const m=raw.match(/\|(-?\d+(?:\.\d+)?)$/);
+  if(m){ratio=Number(m[1]);raw=raw.slice(0,-m[0].length)}
+  const parts=raw.split(",").map(range).filter(Boolean);
   return parts.length?{parts,ratio}:null;
 }
-function mapEpisode(sourceEpisode,sourceRange,targetRange){
-  const sr=parseRange(sourceRange);
-  if(!sr||sourceEpisode<sr.start||(sr.end!==Infinity&&sourceEpisode>sr.end))return null;
-  const t=splitTarget(targetRange);
-  if(!t)return null;
-
-  const offset=sourceEpisode-sr.start;
-
-  if(t.ratio>0){
-    const weight=Math.max(1,t.ratio);
-    const targetOffset=Math.floor(offset*weight);
-    let remaining=targetOffset;
-    for(const p of t.parts){
-      const len=p.end===Infinity?Infinity:p.end-p.start+1;
-      if(remaining<len)return p.start+remaining;
-      if(len!==Infinity)remaining-=len;
-      else return p.start+remaining;
-    }
-    return null;
-  }
-
-  const divisor=Math.abs(t.ratio);
-  const targetOffset=Math.floor(offset/divisor);
-  let remaining=targetOffset;
+function mapEpisode(ep,source,target){
+  const sr=range(source);
+  if(!sr||ep<sr.a||(sr.b!==Infinity&&ep>sr.b))return null;
+  const t=targetParts(target);
+  if(!t||!Number.isFinite(t.ratio)||t.ratio===0)return null;
+  let offset=ep-sr.a;
+  if(t.ratio>0)offset=Math.floor(offset*t.ratio);
+  else offset=Math.floor(offset/Math.abs(t.ratio));
   for(const p of t.parts){
-    const len=p.end===Infinity?Infinity:p.end-p.start+1;
-    if(remaining<len)return p.start+remaining;
-    if(len!==Infinity)remaining-=len;
-    else return p.start+remaining;
+    const len=p.b===Infinity?Infinity:p.b-p.a+1;
+    if(offset<len)return p.a+offset;
+    if(len!==Infinity)offset-=len;
   }
   return null;
 }
-function resolveTarget(target,episode){
-  for(const[r,t]of target.ranges||[]){
-    const mapped=mapEpisode(episode,r,t);
-    if(mapped!==null)return mapped;
+function resolveTarget(t,episode){
+  if(episode==null)return null;
+  for(const[r,to]of t.ranges||[]){
+    const ep=mapEpisode(episode,r,to);
+    if(ep!==null)return ep;
   }
   return null;
-}
-function findProvider(targets,provider){
-  return(targets||[]).filter(x=>x.provider===provider);
 }
 
 exports.handler=async(event)=>{
   const q=event.queryStringParameters||{};
-  const tmdbId=parseIntSafe(q.tmdbId);
-  const season=parseIntSafe(q.season);
-  const episode=parseIntSafe(q.episode);
+  let provider=q.provider;
+  let id=q.id;
 
-  log(`REQUEST TMDB=${tmdbId||"?"} S${season||"?"}E${episode||"?"}`);
+  const tmdbId=num(q.tmdbId);
+  const season=num(q.season);
+  const episode=num(q.episode);
 
-  if(!tmdbId||!season||!episode)return json({ok:false,error:"tmdbId,season,episode required"},400);
+  if(tmdbId){
+    provider="tmdb_show";
+    id=String(tmdbId);
+  }
+
+  if(!provider||!id)return json({ok:false,error:"tmdbId or provider+id required"},400);
+
+  const allowed=new Set(["tmdb_show","tmdb_movie","mal","anilist"]);
+  if(!allowed.has(provider))return json({ok:false,error:"unsupported provider"},400);
 
   try{
     const store=getStore(STORE_NAME);
     const meta=await store.get(META_KEY,{type:"json"});
 
     if(!meta?.activeVersion){
-      return json({ok:false,error:"AniBridge mapping has not been initialized yet"},503);
+      return json({ok:false,error:"mapping not initialized"},503);
     }
 
-    const descriptor=`tmdb_show:${tmdbId}:s${season}`;
-    const shard=shardFor("tmdb_show",tmdbId);
-    const key=`v${meta.activeVersion}/shard-${shard}`;
-    const data=await store.get(key,{type:"json"});
+    const descriptor=provider==="tmdb_show"&&season
+      ?`tmdb_show:${id}:s${season}`
+      :`${provider}:${id}`;
+
+    const shard=shardFor(provider,id);
+    const data=await store.get(`v${meta.activeVersion}/shard-${shard}`,{type:"json"});
     const entry=data?.[descriptor];
 
     if(!entry){
       log(`MISS ${descriptor}`);
-      return json({ok:true,source:"anibridge-v3",found:false,mapping:null});
+      return json({ok:true,found:false,mapping:null});
     }
 
-    const mal=[];
-    const anilist=[];
-    const other=[];
+    const result={
+      provider,
+      id:String(id),
+      scope:entry.scope||null,
+      targets:[]
+    };
 
-    for(const target of entry.targets||[]){
-      const ep=resolveTarget(target,episode);
-      if(ep===null)continue;
-
-      const item={
-        id:String(target.id),
-        episode:ep,
-        scope:target.scope||null
-      };
-
-      if(target.provider==="mal")mal.push(item);
-      else if(target.provider==="anilist")anilist.push(item);
-      else other.push({...item,provider:target.provider});
+    for(const t of entry.targets||[]){
+      const mappedEpisode=episode?resolveTarget(t,episode):null;
+      result.targets.push({
+        provider:t.provider,
+        id:String(t.id),
+        scope:t.scope||null,
+        episode:mappedEpisode,
+        ranges:t.ranges
+      });
     }
 
-    if(!mal.length&&!anilist.length){
-      log(`NO MAL/ANILIST MATCH ${descriptor} E${episode}`);
-      return json({ok:true,source:"anibridge-v3",found:false,mapping:null});
-    }
+    const mal=result.targets.filter(x=>x.provider==="mal");
+    const anilist=result.targets.filter(x=>x.provider==="anilist");
+    const tmdb=result.targets.filter(x=>x.provider==="tmdb_show"||x.provider==="tmdb_movie");
 
     const mapping={
-      tmdbId:String(tmdbId),
-      season,
-      episode,
       malId:mal[0]?.id||null,
       malEpisode:mal[0]?.episode||null,
       anilistId:anilist[0]?.id||null,
       anilistEpisode:anilist[0]?.episode||null,
-      mal,
-      anilist,
-      other
+      tmdbId:tmdb[0]?.id||null,
+      tmdbEpisode:tmdb[0]?.episode||null,
+      targets:result.targets
     };
 
-    log(`HIT ${descriptor} E${episode} MAL=${mapping.malId||"-"} E${mapping.malEpisode||"-"} ANILIST=${mapping.anilistId||"-"} E${mapping.anilistEpisode||"-"}`);
+    log(`HIT ${descriptor}${episode?` E${episode}`:""} MAL=${mapping.malId||"-"} ANILIST=${mapping.anilistId||"-"} TMDB=${mapping.tmdbId||"-"}`);
 
     return json({
       ok:true,
-      source:"anibridge-v3",
       found:true,
+      source:"anibridge-v3",
+      activeVersion:meta.activeVersion,
       mapping
     });
   }catch(e){
