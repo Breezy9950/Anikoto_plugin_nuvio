@@ -66,7 +66,7 @@ exports.handler=async(event)=>{
   if(!allowed.has(provider))return json({ok:false,error:"unsupported provider"},400);
 
   try{
-    cconst store=getStore(STORE_NAME,{
+const store=getStore(STORE_NAME,{
   siteID:process.env.NETLIFY_SITE_ID,
   token:process.env.NETLIFY_AUTH_TOKEN
 });
