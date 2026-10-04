@@ -138,4 +138,4 @@ exports.handler=async()=>{
   }
 };
 
-exports.config={schedule:"@daily"};
+exports.config={schedule:"0 0 * * *"};
