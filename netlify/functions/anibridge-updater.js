@@ -54,7 +54,10 @@ exports.handler=async()=>{
   log("========================================");
   log("Updater START");
   try{
-    const store=getStore(STORE_NAME);
+    const store=getStore(STORE_NAME,{
+  siteID:process.env.NETLIFY_SITE_ID,
+  token:process.env.NETLIFY_AUTH_TOKEN
+});
     const oldMeta=await store.get(META_KEY,{type:"json"});
 
     if(oldMeta?.updatedAt&&Date.now()-Number(oldMeta.updatedAt)<REFRESH_MS){
