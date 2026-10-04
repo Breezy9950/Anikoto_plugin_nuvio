@@ -1,5 +1,5 @@
 const cheerio=require("cheerio-without-node-native");
-const crypto=require("crypto");
+const CryptoJS=require("crypto-js");
 
 const ANIKOTO_URL="https://anikototv.to";
 const AJAX_URL=`${ANIKOTO_URL}/ajax`;
@@ -239,46 +239,11 @@ async function getServerUrl(linkId){
   return body?.result?.url?String(body.result.url).trim():null;
 }
 
-function base64UrlDecode(value){
-  return Buffer.from(String(value).replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(String(value).length/4)*4,"="),"base64");
-}
-
-function sourceFile(response){
-  const encrypted=response?.enc;
-  if(typeof encrypted==="string"&&encrypted){
-    try{
-      const key=Buffer.alloc(32);
-      Buffer.from("i?LMTAx0Q6,:}50U","utf8").copy(key);
-      const iv=Buffer.from("W0;27ToaUpl_P%'c","utf8");
-      const decipher=crypto.createDecipheriv("aes-256-cbc",key,iv);
-      const plaintext=Buffer.concat([decipher.update(base64UrlDecode(encrypted)),decipher.final()]).toString("utf8");
-      const decoded=JSON.parse(plaintext);
-      if(typeof decoded?.file==="string"&&decoded.file)return decoded.file;
-    }catch(error){
-      log(`Megaplay encrypted source decode failed: ${error.message}`);
-    }
-  }
-  if(response?.sources&&typeof response.sources==="object"&&!Array.isArray(response.sources)&&typeof response.sources.file==="string")return response.sources.file;
-  if(Array.isArray(response?.sources)&&response.sources.length&&typeof response.sources[0]?.file==="string")return response.sources[0].file;
-  return null;
-}
-
-function signMegaplayUrl(fileUrl){
-  try{
-    const uri=new URL(fileUrl);
-    const match=uri.pathname.match(/\/([a-f0-9]{32})\/([a-f0-9]{32})\//i);
-    if(!match)return fileUrl;
-    const expires=Math.floor(Date.now()/1000)+90;
-    const payload=Buffer.from(`${expires}|${match[1].toLowerCase()}/${match[2].toLowerCase()}`,"utf8");
-    const signature=crypto.createHmac("sha256","MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s").update(payload).digest();
-    const enc=buffer=>buffer.toString("base64url").replace(/=+$/,"");
-    uri.searchParams.set("token",`${enc(payload)}.${enc(signature)}`);
-    return uri.toString();
-  }catch(_){
-    return fileUrl;
-  }
-}
-
+function base64UrlToBase64(value){const s=String(value||"").replace(/-/g,"+").replace(/_/g,"/");return s+"=".repeat((4-s.length%4)%4);}
+function utf8PaddedKey(text){const bytes=unescape(encodeURIComponent(text));let hex="";for(let i=0;i<bytes.length;i++)hex+=("0"+bytes.charCodeAt(i).toString(16)).slice(-2);return CryptoJS.enc.Hex.parse((hex+"0".repeat(64)).slice(0,64));}
+function toBase64Url(wordArray){return CryptoJS.enc.Base64.stringify(wordArray).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/g,"");}
+function sourceFile(response){const encrypted=response?.enc;if(typeof encrypted==="string"&&encrypted){try{const key=utf8PaddedKey("i?LMTAx0Q6,:}50U");const iv=CryptoJS.enc.Utf8.parse("W0;27ToaUpl_P%'c");const cipherParams=CryptoJS.lib.CipherParams.create({ciphertext:CryptoJS.enc.Base64.parse(base64UrlToBase64(encrypted))});const plaintext=CryptoJS.AES.decrypt(cipherParams,key,{iv,mode:CryptoJS.mode.CBC,padding:CryptoJS.pad.Pkcs7}).toString(CryptoJS.enc.Utf8);const decoded=JSON.parse(plaintext);if(typeof decoded?.file==="string"&&decoded.file)return decoded.file;}catch(error){log(`Megaplay encrypted source decode failed: ${error.message}`);}}if(response?.sources&&typeof response.sources==="object"&&!Array.isArray(response.sources)&&typeof response.sources.file==="string")return response.sources.file;if(Array.isArray(response?.sources)&&response.sources.length&&typeof response.sources[0]?.file==="string")return response.sources[0].file;return null;}
+function signMegaplayUrl(fileUrl){try{const uri=new URL(fileUrl);const match=uri.pathname.match(/\/([a-f0-9]{32})\/([a-f0-9]{32})\//i);if(!match)return fileUrl;const expires=Math.floor(Date.now()/1000)+90;const payload=CryptoJS.enc.Utf8.parse(`${expires}|${match[1].toLowerCase()}/${match[2].toLowerCase()}`);const signature=CryptoJS.HmacSHA256(payload,CryptoJS.enc.Utf8.parse("MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"));uri.searchParams.set("token",`${toBase64Url(payload)}.${toBase64Url(signature)}`);return uri.toString();}catch(_){return fileUrl;}}
 function subtitleFormat(url,declared){
   const allowed=new Set(["srt","vtt","ass"]);
   const fromDeclared=String(declared||"").toLowerCase().replace(/^\./,"");
