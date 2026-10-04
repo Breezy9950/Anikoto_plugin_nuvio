@@ -4,7 +4,7 @@ const CryptoJS=require("crypto-js");
 const ANIKOTO_URL="https://anikototv.to";
 const AJAX_URL=`${ANIKOTO_URL}/ajax`;
 const MAPPER_URL="https://mapper.nekostream.site";
-const ANIBRIDGE_MAPPING_URL="https://breezy-plugins.netlify.app/.netlify/functions/anibridge-mapping";
+const ANIBRIDGE_MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anibridge-mapping";
 const USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const ANIKOTO_HEADERS={
   "Referer":`${ANIKOTO_URL}/`,
