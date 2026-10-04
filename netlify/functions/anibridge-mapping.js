@@ -66,7 +66,10 @@ exports.handler=async(event)=>{
   if(!allowed.has(provider))return json({ok:false,error:"unsupported provider"},400);
 
   try{
-    const store=getStore(STORE_NAME);
+    cconst store=getStore(STORE_NAME,{
+  siteID:process.env.NETLIFY_SITE_ID,
+  token:process.env.NETLIFY_AUTH_TOKEN
+});
     const meta=await store.get(META_KEY,{type:"json"});
 
     if(!meta?.activeVersion){
