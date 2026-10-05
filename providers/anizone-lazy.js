@@ -1,10 +1,10 @@
-const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"Referer":BASE+"/","User-Agent":UA},TIMEOUT=15000;
+const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
 
 async function req(url,opt={},timeout=TIMEOUT){
+  const o={...opt,headers:{...HEADERS,...(opt.headers||{})}};
+  if(typeof AbortController!=="function"||typeof setTimeout!=="function")return fetch(url,o).catch(()=>null);
   const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);
-  try{return await fetch(url,{...opt,signal:c.signal,headers:{...HEADERS,...(opt.headers||{})}})}
-  catch(e){return null}
-  finally{clearTimeout(t)}
+  try{return await fetch(url,{...o,signal:c.signal})}catch(e){return null}finally{clearTimeout(t)}
 }
 
 async function text(url,opt={},timeout=TIMEOUT){
@@ -26,22 +26,13 @@ function attrs(s){
 }
 
 function parseHTML(html){
-  const root={type:"root",children:[]},stack=[root],src=String(html||"");
-  const re=/<\/?([a-zA-Z0-9:-]+)([^>]*)>/g;
+  const root={type:"root",children:[]},stack=[root],src=String(html||""),re=/<\/?([a-zA-Z0-9:-]+)([^>]*)>/g;
   let last=0,m;
   while((m=re.exec(src))){
-    if(m.index>last){
-      const tx=src.slice(last,m.index);
-      if(tx)stack[stack.length-1].children.push({type:"text",text:tx})
-    }
+    if(m.index>last)stack[stack.length-1].children.push({type:"text",text:src.slice(last,m.index)});
     const full=m[0],name=m[1].toLowerCase();
     if(full[1]==="/"){
-      for(let i=stack.length-1;i>0;i--){
-        if(stack[i].name===name){
-          stack.length=i;
-          break
-        }
-      }
+      for(let i=stack.length-1;i>0;i--)if(stack[i].name===name){stack.length=i;break}
     }else if(full[1]!=="!"){
       const n={type:"element",name,attrs:attrs(m[2]),children:[]};
       stack[stack.length-1].children.push(n);
@@ -57,10 +48,10 @@ function children(n){return n&&n.children||[]}
 
 function match(n,sel){
   if(!n||n.type!=="element")return false;
-  if(sel.startsWith("#"))return n.attrs.id===sel.slice(1);
-  if(sel.startsWith("."))return String(n.attrs.class||"").split(/\s+/).includes(sel.slice(1));
-  if(sel.startsWith("[")){
-    const m=sel.match(/^\[([^\]=~*^$]+)(?:([~*^$]?=)["']?([^"'\]]+)["']?)?\]$/);
+  if(sel[0]==="#")return n.attrs.id===sel.slice(1);
+  if(sel[0]===".")return String(n.attrs.class||"").split(/\s+/).includes(sel.slice(1));
+  if(sel[0]==="["){
+    const m=sel.match(/^\[([^\\]=~*^$]+)(?:([~*^$]?=)["']?([^"'\\]]+)["']?)?\]$/);
     if(!m)return false;
     const v=n.attrs[m[1]];
     if(v==null)return false;
@@ -108,176 +99,205 @@ function sanitizeJson(s){
 }
 
 function decodeJSON(s){
-  try{return JSON.parse(sanitizeJson(s))}
-  catch(e){return null}
+  try{return JSON.parse(sanitizeJson(s))}catch(e){return null}
 }
 
 function parseCards(html){
-  const cards=[],src=String(html||"");
-  const m=src.match(/items:\s*JSON\.parse\('((?:[^'\\]|\\.)*)'\)/s);
+  const cards=[],src=String(html||""),m=src.match(/items:\s*JSON\.parse\('((?:[^'\\]|\\.)*)'\)/);
   if(m){
     const d=decodeJSON(m[1]);
     if(Array.isArray(d)){
       for(const x of d){
-        if(x&&typeof x==="object")cards.push(x)
+        if(!x||!x.slug)continue;
+        const titles=new Set();
+        if(x.main_title)titles.add(String(x.main_title));
+        if(x.title_list&&typeof x.title_list==="object")for(const t of Object.values(x.title_list))if(t)titles.add(String(t));
+        if(x.title)titles.add(String(x.title));
+        cards.push({slug:String(x.slug),url:x.url||"/anime/"+x.slug,titles:Array.from(titles)})
       }
     }
   }
   if(cards.length)return cards;
   const root=parseHTML(src);
-  for(const n of all(root,"a")){
-    const x=attr(n,"x-data")||"";
-    if(x.includes("anmTitles")){
-      cards.push({
-        slug:(attr(n,"href")||"").replace(/^\/anime\//,"").replace(/\/$/,""),
-        title:nodeText(n).trim()
-      })
+  for(const n of all(root,"[x-data]")){
+    const xd=String(attr(n,"x-data")||"");
+    if(!xd.includes("anmTitles"))continue;
+    const links=all(n,"a");
+    const a=links.find(x=>String(attr(x,"href")||"").includes("/anime/"))||null;
+    const href=attr(a,"href")||"";
+    if(!href.includes("/anime/"))continue;
+    const p=href.split("/").filter(Boolean),slug=p[p.length-1]||"";
+    if(!slug)continue;
+    const titles=new Set();
+    if(a){
+      const t=nodeText(a).trim();
+      if(t)titles.add(t)
     }
+    const jm=xd.match(/JSON\.parse\('((?:[^'\\]|\\.)*)'\)/);
+    if(jm){
+      const d=decodeJSON(jm[1]);
+      if(d&&typeof d==="object")for(const t of Object.values(d))if(t)titles.add(String(t))
+    }
+    cards.push({slug,titles:Array.from(titles)})
   }
   return cards
 }
 
 function cardSlug(c){
   if(!c)return"";
-  return String(c.slug||c.url||c.href||c.link||"").replace(/^https?:\/\/[^/]+/,"").replace(/^\/anime\//,"").replace(/^\/+/,"").replace(/\/+$/,"")
+  return String(c.slug||c.url||c.href||c.link||"")
+    .replace(/^https?:\/\/[^/]+/,"")
+    .replace(/^\/anime\//,"")
+    .replace(/^\/+/,"")
+    .replace(/\/+$/g,"")
 }
 
-function cardTitle(c){
-  if(!c)return"";
-  return String(c.title||c.name||c.anime_title||c.animeTitle||c.en||c.romaji||"").trim()
+function cardTitles(c){
+  if(!c)return[];
+  const out=[];
+  if(Array.isArray(c.titles))out.push(...c.titles);
+  for(const k of ["main_title","title","name","anime_title","animeTitle","en","english","romaji","original_title","originalTitle"])if(c[k])out.push(c[k]);
+  if(c.title_list&&typeof c.title_list==="object")out.push(...Object.values(c.title_list));
+  return[...new Set(out.map(x=>String(x||"").trim()).filter(Boolean))]
 }
 
-function normalizeTitle(s){
-  return String(s||"").toLowerCase().replace(/&amp;/g,"&").replace(/[’'`]/g,"").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim()
+function cardTitle(c){return cardTitles(c)[0]||""}
+
+function normalize(s){
+  return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"").trim()
 }
 
-function titleWords(s){
-  return normalizeTitle(s).split(" ").filter(Boolean)
-}
-
-function titleScore(a,b){
-  const aa=normalizeTitle(a),bb=normalizeTitle(b);
-  if(!aa||!bb)return 0;
-  if(aa===bb)return 100;
-  if(aa.includes(bb)||bb.includes(aa))return 80;
-  const aw=titleWords(aa),bw=titleWords(bb);
-  let hits=0;
-  for(const w of aw)if(w.length>1&&bw.includes(w))hits++;
-  return Math.round(hits/Math.max(aw.length,bw.length)*70)
-}
-
-function seasonPatterns(season){
+function seasonRules(season){
   const s=Number(season)||1;
-  if(s<=1)return[];
-  return[
-    new RegExp("\\bseason\\s*"+s+"\\b","i"),
-    new RegExp("\\b"+s+"(?:st|nd|rd|th)\\s+season\\b","i"),
-    new RegExp("\\bs"+s+"\\b","i"),
-    new RegExp("\\bpart\\s*"+s+"\\b","i"),
-    new RegExp("\\b"+s+"\\b","i")
-  ]
+  if(s===1)return{mustNot:[
+    /season\s*[2-9]/i,
+    /saison\s*[2-9]/i,
+    /[\s\-][iI]{2,}/,
+    /\s+[2-9]nd/i,
+    /\s+[2-9]rd/i,
+    /\s+[2-9]th/i,
+    /\s+ii\b/i,
+    /\s+iii\b/i,
+    /\s+iv\b/i,
+    /\s+v\b/i,
+    /movie/i,
+    /gekijouban/i,
+    /the movie/i
+  ]};
+  if(s===2)return{must:[/season\s*2/i,/saison\s*2/i,/2nd\s*season/i,/[\s\-]ii\b/i,/\b2\b/]};
+  if(s===3)return{must:[/season\s*3/i,/saison\s*3/i,/3rd\s*season/i,/[\s\-]iii\b/i,/\b3\b/]};
+  if(s===4)return{must:[/season\s*4/i,/saison\s*4/i,/4th\s*season/i,/[\s\-]iv\b/i,/\b4\b/,/final\s*season/i]};
+  return{must:[
+    new RegExp("(?:season|saison)\\s*"+s,"i"),
+    new RegExp("\\b"+s+"\\b")
+  ]}
 }
 
-function matchCard(cards,title,season){
-  if(!cards||!cards.length)return null;
-  const s=Number(season)||1;
-  let best=null,bestScore=-1;
-  for(const c of cards){
-    const ct=cardTitle(c);
-    if(!ct)continue;
-    let score=titleScore(title,ct);
-    if(s>1){
-      let hasSeason=false;
-      for(const p of seasonPatterns(s))if(p.test(ct)){hasSeason=true;break}
-      score+=hasSeason?35:-15
-    }
-    if(score>bestScore){
-      bestScore=score;
-      best=c
-    }
+function matchCard(cards,targetTitles,baseTitle,season=1,seasonName=""){
+  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))],base=normalize(baseTitle),sn=normalize(seasonName),s=Number(season)||1;
+  if(sn&&sn!=="season"+s){
+    for(const c of cards)for(const t of cardTitles(c))if(normalize(t).includes(sn))return c.slug
   }
-  return bestScore>=35?best:null
-}
-
-function matchMovieCard(cards,title){
-  if(!cards||!cards.length)return null;
-  let best=null,bestScore=-1;
+  for(const target of targets)for(const c of cards)for(const t of cardTitles(c))if(normalize(t)===target)return c.slug;
+  const rules=seasonRules(s);
   for(const c of cards){
-    const score=titleScore(title,cardTitle(c));
-    if(score>bestScore){
-      bestScore=score;
-      best=c
+    const titles=cardTitles(c);
+    let baseMatch=false;
+    for(const t of titles){
+      const n=normalize(t);
+      if(!base||n.includes(base)||base.includes(n)){baseMatch=true;break}
     }
+    if(!baseMatch)continue;
+    if(s===1){
+      if(rules.mustNot.some(r=>titles.some(t=>r.test(t))))continue;
+      return c.slug
+    }
+    if(titles.some(t=>rules.must.some(r=>r.test(t))))return c.slug
   }
-  return bestScore>=35?best:null
+  return cards[0]?cards[0].slug:null
 }
 
-async function searchCards(query){
-  if(!query)return[];
-  const url=BASE+"/anime?search="+encodeURIComponent(query)+"&sort=title-asc";
-  const h=await text(url,{headers:HEADERS},10000);
-  if(!h)return[];
-  return parseCards(h)
+function matchMovieCard(cards,targetTitles){
+  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))];
+  for(const c of cards)for(const t of cardTitles(c))if(targets.includes(normalize(t)))return c.slug;
+  for(const c of cards)for(const t of cardTitles(c)){
+    const n=normalize(t);
+    if(targets.some(x=>n.includes(x)||x.includes(n)))return c.slug
+  }
+  return cards[0]?cards[0].slug:null
 }
 
-function parseVidstackFromHtml(html){
-  const root=parseHTML(html),out=[];
-  const m=String(html||"").match(/vidstackPlayer$begin:math:text$JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$\)/);
+async function searchCards(q){
+  if(!q)return[];
+  const h=await text(BASE+"/anime?search="+encodeURIComponent(q)+"&sort=title-asc",{},9000);
+  return h?parseCards(h):[]
+}
+
+function parseVidstack(html){
+  const src=String(html||""),m=src.match(/vidstackPlayer\(JSON\.parse\('((?:[^'\\]|\\.)*)'\)\)/);
   if(m){
     const d=decodeJSON(m[1]);
-    if(d){
-      if(Array.isArray(d))out.push(...d);
-      else if(Array.isArray(d.sources))out.push(...d.sources);
-      else if(d.source)out.push(d.source);
-      else out.push(d)
+    if(d&&d.src){
+      const subtitles=(Array.isArray(d.subtitles)?d.subtitles:[])
+        .map(s=>({
+          url:String(s.file||"").replace(/\\/g,""),
+          name:s.title||s.language||"English",
+          language:s.language||"en"
+        }))
+        .filter(s=>s.url);
+      return{masterUrl:String(d.src).replace(/\\/g,""),subtitles}
     }
   }
-  for(const p of all(root,"media-player")){
-    const src=attr(p,"src");
-    if(src)out.push({src,type:attr(p,"type")||"application/x-mpegURL"})
+  const root=parseHTML(src);
+  let masterUrl=attr(first(root,"media-player"),"src")||"";
+  if(!masterUrl){
+    const u=src.match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/i);
+    if(u)masterUrl=u[0]
   }
-  const ms=String(html||"").match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/g)||[];
-  for(const u of ms)out.push({src:u,type:"application/x-mpegURL"});
-  const tracks=[];
+  const subtitles=[];
   for(const t of all(root,"track")){
-    const u=attr(t,"src");
-    if(u)tracks.push({url:u,lang:attr(t,"srclang")||attr(t,"label")||""})
+    const u=attr(t,"src")||"",kind=String(attr(t,"kind")||"").toLowerCase();
+    if(u&&(kind==="subtitles"||kind==="captions"||/\.(ass|vtt)(?:\?|$)/i.test(u)))subtitles.push({
+      url:u,
+      name:attr(t,"label")||"English",
+      language:attr(t,"srclang")||"en"
+    })
   }
-  return{sources:out,subtitles:tracks}
+  return{masterUrl,subtitles}
 }
 
-function normalizeStream(x){
-  if(!x)return null;
-  if(typeof x==="string")return/^https?:\/\//i.test(x)?{url:x}:null;
-  const u=x.url||x.src||x.file||x.href;
-  if(!u||!/^https?:\/\//i.test(String(u)))return null;
-  return{url:String(u),type:x.type||"application/x-mpegURL",quality:x.quality||x.label||""}
-}
-
-function audioFormat(s){
-  const x=String(s||"").toLowerCase();
-  if(x.includes("multi"))return"Multi";
-  if(x.includes("dub")||x.includes("english"))return"English";
-  return"Japanese"
+function parseAudioFormat(s){
+  const x=String(s||"").toLowerCase(),j=x.includes("japanese")||x.includes("jpn")||x.includes("ja"),e=x.includes("english")||x.includes("eng")||x.includes("en");
+  if(e&&j)return"Dual Audio";
+  if(e)return"Dub";
+  if(j)return"Sub";
+  if(x.includes("multi"))return"Multi-Audio";
+  return"Sub"
 }
 
 async function episodePage(slug,ep){
-  const url=BASE+"/anime/"+slug+"/"+ep;
-  const r=await req(url,{headers:HEADERS},TIMEOUT);
+  const r=await req(BASE+"/anime/"+slug+"/"+ep,{},10000);
   if(!r||!r.ok)return null;
   let html="";
   try{html=await r.text()}catch(e){return null}
-  const sc=r.headers&&r.headers.get?r.headers.get("set-cookie"):"";
-  return{html,cookie:sc||""}
+  let cookie="";
+  try{
+    if(r.headers&&typeof r.headers.getSetCookie==="function")cookie=r.headers.getSetCookie().map(c=>c.split(";")[0]).join("; ");
+    else if(r.headers&&r.headers.get)cookie=r.headers.get("set-cookie")||""
+  }catch(e){}
+  return{html,cookie}
 }
 
-async function getTmdbInfo(tmdbId,mediaType){
-  const url=mediaType==="movie"
-    ?"https://api.themoviedb.org/3/movie/"+encodeURIComponent(tmdbId)+"?language=en-US"
-    :"https://api.themoviedb.org/3/tv/"+encodeURIComponent(tmdbId)+"?language=en-US";
-  const r=await req(url,{headers:{"Accept":"application/json"}},10000);
-  if(!r||!r.ok)return null;
-  try{return await r.json()}catch(e){return null}
+async function getTmdbInfo(tmdbId,mediaType,season=1){
+  const type=mediaType==="movie"?"movie":"tv";
+  const url="https://api.themoviedb.org/3/"+type+"/"+encodeURIComponent(tmdbId)+"?api_key="+TMDB_API_KEY+"&language=en-US";
+  const d=await json(url,{headers:{"Accept":"application/json"}},7000);
+  if(!d)return null;
+  return{
+    title:d.name||d.title||d.original_name||d.original_title||"",
+    originalTitle:d.original_name||d.original_title||"",
+    seasonName:""
+  }
 }
 
 async function dbMapping(tmdbId,season,episode){
@@ -288,23 +308,13 @@ async function dbMapping(tmdbId,season,episode){
     console.log("[AniZone Lazy] REFUSING EMPTY TMDB ID");
     return null
   }
-
-  console.log("[AniZone Lazy] DB lookup",{tmdb_id:tmdbId,season,episode});
-
-  const u=MAPPING_URL+
-    "?tmdb_id="+encodeURIComponent(tmdbId)+
-    "&tmdbId="+encodeURIComponent(tmdbId)+
-    "&season="+encodeURIComponent(season)+
-    "&episode="+encodeURIComponent(episode);
-
-  const d=await json(u,{headers:{"Accept":"application/json"}},10000);
-
+  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
+  const d=await json(u,{headers:{"Accept":"application/json"}},8000);
   if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] DB HIT",d.mapping);
+    console.log("[AniZone Lazy] DB HIT",{tmdbId,season,episode});
     return{mapping:d.mapping,fromDb:true}
   }
-
-  console.log("[AniZone Lazy] DB MISS",d);
+  console.log("[AniZone Lazy] DB MISS",{tmdbId,season,episode,status:d&&d.status});
   return null
 }
 
@@ -312,169 +322,130 @@ async function fallbackMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
   season=Number(season)||1;
   episode=Number(episode)||1;
-
-  if(!tmdbId){
-    console.log("[AniZone Lazy] REFUSING FALLBACK WITH EMPTY TMDB ID");
-    return null
-  }
-
-  console.log("[AniZone Lazy] FALLBACK MAPPING",{tmdb_id:tmdbId,season,episode});
-
-  const u=MAPPING_URL+
-    "?resolve=1"+
-    "&tmdb_id="+encodeURIComponent(tmdbId)+
-    "&tmdbId="+encodeURIComponent(tmdbId)+
-    "&season="+encodeURIComponent(season)+
-    "&episode="+encodeURIComponent(episode);
-
+  if(!tmdbId)return null;
+  const u=MAPPING_URL+"?resolve=1&tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
   const d=await json(u,{headers:{"Accept":"application/json"}},20000);
-
   if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] FALLBACK MAPPING HIT",d.mapping);
+    console.log("[AniZone Lazy] FALLBACK HIT",{tmdbId,season,episode});
     return{mapping:d.mapping,fromDb:false}
   }
-
-  console.log("[AniZone Lazy] FALLBACK MAPPING FAILED",d);
+  console.log("[AniZone Lazy] FALLBACK FAILED",{tmdbId,season,episode,status:d&&d.status});
   return null
 }
 
 function triggerPopulation(seed){
-  if(!seed||!seed.tmdb_id){
-    console.log("[AniZone Lazy] POPULATION NOT STARTED: INVALID SEED",seed);
-    return
-  }
-
-  console.log("[AniZone Lazy] START BACKGROUND POPULATION",seed);
-
+  if(!seed||!seed.tmdb_id)return;
   try{
     void fetch(POPULATE_URL,{
       method:"POST",
-      headers:{
-        ...HEADERS,
-        "Content-Type":"application/json",
-        "Accept":"application/json"
-      },
+      headers:{...HEADERS,"Content-Type":"application/json","Accept":"application/json"},
       body:JSON.stringify(seed)
-    }).then(r=>{
-      console.log("[AniZone Lazy] BACKGROUND POPULATION REQUEST STATUS",r&&r.status);
-      return r
-    }).catch(e=>{
-      console.log("[AniZone Lazy] BACKGROUND POPULATION REQUEST FAILED",String(e))
-    })
+    }).then(r=>console.log("[AniZone Lazy] POPULATION",seed.tmdb_id,seed.season,seed.episode,r&&r.status))
+      .catch(e=>console.log("[AniZone Lazy] POPULATION FAILED",String(e)))
   }catch(e){
-    console.log("[AniZone Lazy] BACKGROUND POPULATION LAUNCH FAILED",String(e))
+    console.log("[AniZone Lazy] POPULATION LAUNCH FAILED",String(e))
   }
 }
 
-function mappingTitle(mapping){
-  return String(mapping&&(mapping.anime_title||mapping.title||mapping.name||mapping.mal_title)||"").trim()
+function mapTitle(m){
+  return String(m&&(m.anime_title||m.title||m.name||m.mal_title)||"").trim()
 }
 
-function mappingEpisode(mapping,requestedEpisode){
-  const v=mapping&&(mapping.mal_episode!=null?mapping.mal_episode:mapping.episode!=null?mapping.episode:mapping.malEpisode);
-  const n=Number(v);
-  return Number.isFinite(n)&&n>0?n:Number(requestedEpisode)||1
+function mapEp(m,fallback){
+  const n=Number(m&&(m.mal_episode!=null?m.mal_episode:m.episode!=null?m.episode:m.malEpisode));
+  return Number.isFinite(n)&&n>0?n:Number(fallback)||1
 }
 
-function mappingMalId(mapping){
-  const v=mapping&&(mapping.mal_id!=null?mapping.mal_id:mapping.malId!=null?mapping.malId:mapping.id);
+function mapTitles(m){
+  const a=[];
+  if(m&&Array.isArray(m.titles))a.push(...m.titles);
+  const t=mapTitle(m);
+  if(t)a.push(t);
+  return[...new Set(a.map(x=>String(x||"").trim()).filter(Boolean))]
+}
+
+function mapMalId(m){
+  const v=m&&(m.mal_id!=null?m.mal_id:m.malId!=null?m.malId:m.id);
   return v==null?"":String(v)
 }
 
-function mappingImdb(mapping){
-  return String(mapping&&(mapping.imdb_id||mapping.imdbId||mapping.imdb)||"")
+function mapImdb(m){
+  return String(m&&(m.imdb_id||m.imdbId||m.imdb)||"")
+}
+
+function cleanQuery(s){
+  return String(s||"").split(":")[0].replace(/season.*|\d+(?:st|nd|rd|th)\s+season|saison.*/i,"").trim()
 }
 
 async function resolveStream(tmdbId,mediaType,season,episode){
   tmdbId=String(tmdbId||"").trim();
-  mediaType=String(mediaType||"tv");
+  mediaType=String(mediaType||"tv").toLowerCase();
   season=Number(season)||1;
   episode=Number(episode)||1;
-
-  console.log("[AniZone Lazy] REQUEST",{
-    tmdbId,
-    mediaType,
-    season,
-    episode
-  });
-
   if(!tmdbId){
-    console.log("[AniZone Lazy] ABORT: EMPTY TMDB ID");
+    console.log("[AniZone Lazy] ABORT EMPTY TMDB ID");
     return[]
   }
 
-  const isMovie=mediaType==="movie";
-  let mappingResult=null;
-  let title="";
-  let malEpisode=1;
-  let malId="";
-  let imdbId="";
+  console.log("[AniZone Lazy] REQUEST",{tmdbId,mediaType,season,episode});
 
-  if(!isMovie){
+  const movie=mediaType==="movie";
+  let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="";
+
+  if(!movie){
     mappingResult=await dbMapping(tmdbId,season,episode);
     if(!mappingResult)mappingResult=await fallbackMapping(tmdbId,season,episode);
-
     if(!mappingResult||!mappingResult.mapping){
       console.log("[AniZone Lazy] NO MAPPING AVAILABLE");
       return[]
     }
 
-    const mapping=mappingResult.mapping;
-
-    title=mappingTitle(mapping);
-    malEpisode=mappingEpisode(mapping,episode);
-    malId=mappingMalId(mapping);
-    imdbId=mappingImdb(mapping);
+    const m=mappingResult.mapping;
+    title=mapTitle(m);
+    targetTitles=mapTitles(m);
+    malEpisode=mapEp(m,episode);
+    imdbId=mapImdb(m);
+    malId=mapMalId(m);
+    seasonName=String(m.season_name||m.seasonName||"");
 
     if(!mappingResult.fromDb){
       triggerPopulation({
-        tmdb_id:String(mapping.tmdb_id||mapping.tmdbId||tmdbId),
+        tmdb_id:String(m.tmdb_id||m.tmdbId||tmdbId),
         imdb_id:imdbId,
         mal_id:malId,
-        title:title,
-        season:season,
-        episode:episode,
+        title,
+        season,
+        episode,
         mal_episode:malEpisode
       })
     }
   }else{
     const info=await getTmdbInfo(tmdbId,"movie");
-    if(!info)return[];
-    title=String(info.title||info.original_title||"").trim();
-    imdbId=String(info.imdb_id||"");
-    malEpisode=1;
-    if(!title)return[]
+    if(!info||!info.title){
+      console.log("[AniZone Lazy] MOVIE TMDB LOOKUP FAILED",tmdbId);
+      return[]
+    }
+    title=info.title;
+    if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
   }
 
+  if(!title&&targetTitles.length)title=targetTitles[0];
   if(!title){
     console.log("[AniZone Lazy] EMPTY TITLE AFTER MAPPING");
     return[]
   }
 
-  console.log("[AniZone Lazy] SEARCH",{
-    title,
-    season,
-    episode,
-    mal_episode:malEpisode
-  });
+  const specific=season===1||movie?[...targetTitles,title,...altTitles]:[...targetTitles];
+  const base=cleanQuery(title);
 
-  let cards=await searchCards(title);
+  let cards=await searchCards(base);
+
+  if(!cards.length&&title!==base)cards=await searchCards(title);
 
   if(!cards.length){
-    const info=await getTmdbInfo(tmdbId,mediaType);
-    if(info){
-      const alt=[
-        info.name,
-        info.original_name,
-        info.title,
-        info.original_title
-      ].filter(Boolean);
-
-      for(const q of alt){
-        if(normalizeTitle(q)===normalizeTitle(title))continue;
-        cards=await searchCards(q);
-        if(cards.length)break
-      }
+    for(const t of altTitles){
+      cards=await searchCards(t.split(":")[0].trim());
+      if(cards.length)break
     }
   }
 
@@ -483,142 +454,150 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     return[]
   }
 
-  const card=isMovie?matchMovieCard(cards,title):matchCard(cards,title,season);
-
-  if(!card){
-    console.log("[AniZone Lazy] CARD NOT FOUND",{
-      title,
-      season,
-      results:cards.length
-    });
-    return[]
-  }
-
-  const slug=cardSlug(card);
+  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,season,seasonName);
 
   if(!slug){
-    console.log("[AniZone Lazy] CARD HAS NO SLUG",card);
+    console.log("[AniZone Lazy] CARD NOT FOUND",{title,season,results:cards.length});
     return[]
   }
 
-  console.log("[AniZone Lazy] CARD MATCH",{
-    title:cardTitle(card),
-    slug,
-    mal_episode:malEpisode
-  });
+  console.log("[AniZone Lazy] CARD MATCH",{title,slug,episode:malEpisode});
 
   const page=await episodePage(slug,malEpisode);
-
   if(!page){
     console.log("[AniZone Lazy] EPISODE PAGE FAILED",{slug,episode:malEpisode});
     return[]
   }
 
-  const parsed=parseVidstackFromHtml(page.html);
+  const root=parseHTML(page.html);
+  const parsed=parseVidstack(page.html);
   const streams=[];
   const seen=new Set();
 
-  for(const s of parsed.sources||[]){
-    const n=normalizeStream(s);
-    if(!n||seen.has(n.url))continue;
+  const buttons=all(root,"button").filter(b=>String(attr(b,"wire:click")||"").includes("setVideo"));
 
-    seen.add(n.url);
+  let defaultFormat="Sub",defaultServerName="AniZone";
 
+  if(buttons.length){
+    const label=nodeText(buttons[0]).replace(/\s+/g," ").trim();
+    defaultFormat=parseAudioFormat(label);
+    const nm=label.match(/^([A-Za-z0-9_-]+)/);
+    if(nm)defaultServerName=nm[1]
+  }
+
+  if(parsed.masterUrl){
+    seen.add(parsed.masterUrl);
     streams.push({
-      ...n,
-      title:"AniZone",
       name:"AniZone",
-      behaviorHints:{
-        ...(n.behaviorHints||{}),
-        bingeGroup:"anizone"
-      },
-      subtitles:parsed.subtitles||[],
-      audio:audioFormat(n.label||n.quality||"")
+      title:title+" - Episode "+malEpisode+" ["+defaultServerName+" - "+defaultFormat+"]",
+      url:parsed.masterUrl,
+      quality:"Multi",
+      headers:HEADERS,
+      subtitles:parsed.subtitles||[]
     })
   }
 
-  const root=parseHTML(page.html);
-  const buttons=all(root,"button");
+  if(buttons.length>1){
+    const csrf=String(
+      attr(first(root,"script[data-csrf]"),"data-csrf")||
+      attr(first(root,'meta[name="csrf-token"]'),"content")||
+      ""
+    );
+    const snapshot=attr(first(root,"[wire:snapshot]"),"wire:snapshot")||"";
+    const componentId=attr(first(root,"[wire:id]"),"wire:id")||"";
 
-  for(let i=0;i<buttons.length;i++){
-    const btn=buttons[i];
-    const vm=String(attr(btn,"wire:click")||"").match(/setVideo$begin:math:text$\(\\d\+\)$end:math:text$/);
-    if(!vm)continue;
+    if(csrf&&snapshot&&page.cookie){
+      const jobs=[];
 
-    const videoId=vm[1];
+      for(let i=1;i<buttons.length;i++){
+        const btn=buttons[i];
+        const vm=String(attr(btn,"wire:click")||"").match(/setVideo\((\d+)\)/);
+        if(!vm)continue;
 
-    try{
-      const csrf=String(attr(first(root,'meta[name="csrf-token"]'),"content")||"");
-      const snapshotNode=first(root,"[wire:snapshot]");
-      const snapshot=attr(snapshotNode,"wire:snapshot")||"";
-      const componentId=attr(first(root,"[wire:id]"),"wire:id")||"";
+        const videoId=Number(vm[1]);
+        const label=nodeText(btn).replace(/\s+/g," ").trim();
+        const format=parseAudioFormat(label);
+        const nm=label.match(/^([A-Za-z0-9_-]+)/);
+        const serverName=nm?nm[1]:"Server "+(i+1);
 
-      const body={
-        components:[{
-          snapshot:snapshot,
-          updates:[],
-          calls:[{
-            path:"",
-            method:"setVideo",
-            params:[Number(videoId)]
-          }]
-        }]
-      };
+        jobs.push((async()=>{
+          try{
+            const body={
+              _token:csrf,
+              components:[{
+                snapshot,
+                updates:{},
+                calls:[{
+                  path:"",
+                  method:"setVideo",
+                  params:[videoId]
+                }]
+              }]
+            };
 
-      const extraHeaders={
-        ...HEADERS,
-        "Content-Type":"application/json",
-        "X-Livewire":"true",
-        "X-Requested-With":"XMLHttpRequest"
-      };
+            const r=await req(BASE+"/livewire/update",{
+              method:"POST",
+              headers:{
+                "Accept":"*/*",
+                "Content-Type":"application/json",
+                "X-Livewire":"",
+                "X-CSRF-TOKEN":csrf,
+                "Origin":BASE,
+                "Referer":BASE+"/anime/"+slug+"/"+malEpisode,
+                "Cookie":page.cookie,
+                ...(componentId?{"X-Livewire-Id":componentId}:{})
+              },
+              body:JSON.stringify(body)
+            },8000);
 
-      if(csrf)extraHeaders["X-CSRF-TOKEN"]=csrf;
-      if(page.cookie)extraHeaders.Cookie=page.cookie;
-      if(componentId)extraHeaders["X-Livewire-Id"]=componentId;
+            if(!r||!r.ok)return null;
 
-      const r=await req(BASE+"/livewire/update",{
-        method:"POST",
-        headers:extraHeaders,
-        body:JSON.stringify(body)
-      },10000);
+            let raw="";
+            try{raw=await r.text()}catch(e){return null}
 
-      if(!r||!r.ok)continue;
+            let data=null;
+            try{data=JSON.parse(raw)}catch(e){}
 
-      let h="";
-      try{h=await r.text()}catch(e){continue}
+            let html="";
+            if(data&&data.components&&data.components[0]&&data.components[0].effects){
+              html=data.components[0].effects.html||""
+            }
+            if(!html)html=raw;
+            if(!html)return null;
 
-      const p=parseVidstackFromHtml(h);
+            const p=parseVidstack(html);
+            if(!p.masterUrl||seen.has(p.masterUrl))return null;
 
-      for(const s of p.sources||[]){
-        const n=normalizeStream(s);
-        if(!n||seen.has(n.url))continue;
-
-        seen.add(n.url);
-
-        streams.push({
-          ...n,
-          title:"AniZone",
-          name:"AniZone",
-          behaviorHints:{
-            ...(n.behaviorHints||{}),
-            bingeGroup:"anizone"
-          },
-          subtitles:p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles||[],
-          audio:audioFormat(n.label||n.quality||"")
-        })
+            return{
+              url:p.masterUrl,
+              stream:{
+                name:"AniZone",
+                title:title+" - Episode "+malEpisode+" ["+serverName+" - "+format+"]",
+                url:p.masterUrl,
+                quality:"Multi",
+                headers:HEADERS,
+                subtitles:p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles||[]
+              }
+            }
+          }catch(e){
+            console.log("[AniZone Lazy] LIVEWIRE SERVER FAILED",videoId,String(e));
+            return null
+          }
+        })())
       }
-    }catch(e){
-      console.log("[AniZone Lazy] LIVEWIRE SERVER FAILED",videoId,String(e))
+
+      const extra=await Promise.all(jobs);
+
+      for(const x of extra){
+        if(x&&x.stream&&!seen.has(x.url)){
+          seen.add(x.url);
+          streams.push(x.stream)
+        }
+      }
     }
   }
 
-  console.log("[AniZone Lazy] STREAMS FOUND",{
-    title,
-    slug,
-    episode:malEpisode,
-    count:streams.length
-  });
-
+  console.log("[AniZone Lazy] STREAMS FOUND",{title,slug,episode:malEpisode,count:streams.length});
   return streams
 }
 
