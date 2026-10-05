@@ -49,7 +49,7 @@
       "version":"1.0.0",
       "author":"Nuvio Team",
       "filename":"providers/anizone-lazy.js",
-      "supportedTypes":["tv", "movie"],
+      "supportedTypes":["tv"],
       "enabled":true,
       "formats":["m3u8"],
       "logo":"https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
