@@ -1,4 +1,4 @@
-const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
+const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/shared-mapping",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
 
 async function req(url,opt={},timeout=TIMEOUT){
   const o={...opt,headers:{...HEADERS,...(opt.headers||{})}};
@@ -51,7 +51,7 @@ function match(n,sel){
   if(sel[0]==="#")return n.attrs.id===sel.slice(1);
   if(sel[0]===".")return String(n.attrs.class||"").split(/\s+/).includes(sel.slice(1));
   if(sel[0]==="["){
-    const m=sel.match(/^\[([^\\]=~*^$]+)(?:([~*^$]?=)["']?([^"'\\]]+)["']?)?\]$/);
+    const m=sel.match(/^$begin:math:display$\(\[\^\\$end:math:display$=~*^$]+)(?:([~*^$]?=)["']?([^"'\\]]+)["']?)?\]$/);
     if(!m)return false;
     const v=n.attrs[m[1]];
     if(v==null)return false;
@@ -95,15 +95,15 @@ function sanitizeJson(s){
     .replace(/\\&/g,"&")
     .replace(/\\0/g,"\\u0000")
     .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>"\\u00"+h)
-    .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g,"")
-}
+    .replace(/\$begin:math:text$\?\!\[\"\\\\\/bfnrt\]\|u\[0\-9a\-fA\-F\]\{4\}\)\/g\,\"\"\)
+\}
 
-function decodeJSON(s){
-  try{return JSON.parse(sanitizeJson(s))}catch(e){return null}
-}
+function decodeJSON\(s\)\{
+  try\{return JSON\.parse\(sanitizeJson\(s\)\)\}catch\(e\)\{return null\}
+\}
 
-function parseCards(html){
-  const cards=[],src=String(html||""),m=src.match(/items:\s*JSON\.parse\('((?:[^'\\]|\\.)*)'\)/);
+function parseCards\(html\)\{
+  const cards\=\[\]\,src\=String\(html\|\|\"\"\)\,m\=src\.match\(\/items\:\\s\*JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/);
   if(m){
     const d=decodeJSON(m[1]);
     if(Array.isArray(d)){
@@ -133,7 +133,7 @@ function parseCards(html){
       const t=nodeText(a).trim();
       if(t)titles.add(t)
     }
-    const jm=xd.match(/JSON\.parse\('((?:[^'\\]|\\.)*)'\)/);
+    const jm=xd.match(/JSON\.parse$begin:math:text$\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/);
     if(jm){
       const d=decodeJSON(jm[1]);
       if(d&&typeof d==="object")for(const t of Object.values(d))if(t)titles.add(String(t))
@@ -234,7 +234,7 @@ async function searchCards(q){
 }
 
 function parseVidstack(html){
-  const src=String(html||""),m=src.match(/vidstackPlayer\(JSON\.parse\('((?:[^'\\]|\\.)*)'\)\)/);
+  const src=String(html||""),m=src.match(/vidstackPlayer$begin:math:text$JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$\)/);
   if(m){
     const d=decodeJSON(m[1]);
     if(d&&d.src){
@@ -300,52 +300,7 @@ async function getTmdbInfo(tmdbId,mediaType,season=1){
   }
 }
 
-async function dbMapping(tmdbId,season,episode){
-  tmdbId=String(tmdbId||"").trim();
-  season=Number(season)||1;
-  episode=Number(episode)||1;
-  if(!tmdbId){
-    console.log("[AniZone Lazy] REFUSING EMPTY TMDB ID");
-    return null
-  }
-  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
-  const d=await json(u,{headers:{"Accept":"application/json"}},8000);
-  if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] DB HIT",{tmdbId,season,episode});
-    return{mapping:d.mapping,fromDb:true}
-  }
-  console.log("[AniZone Lazy] DB MISS",{tmdbId,season,episode,status:d&&d.status});
-  return null
-}
-
-async function fallbackMapping(tmdbId,season,episode){
-  tmdbId=String(tmdbId||"").trim();
-  season=Number(season)||1;
-  episode=Number(episode)||1;
-  if(!tmdbId)return null;
-  const u=MAPPING_URL+"?resolve=1&tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
-  const d=await json(u,{headers:{"Accept":"application/json"}},20000);
-  if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] FALLBACK HIT",{tmdbId,season,episode});
-    return{mapping:d.mapping,fromDb:false}
-  }
-  console.log("[AniZone Lazy] FALLBACK FAILED",{tmdbId,season,episode,status:d&&d.status});
-  return null
-}
-
-function triggerPopulation(seed){
-  if(!seed||!seed.tmdb_id)return;
-  try{
-    void fetch(POPULATE_URL,{
-      method:"POST",
-      headers:{...HEADERS,"Content-Type":"application/json","Accept":"application/json"},
-      body:JSON.stringify(seed)
-    }).then(r=>console.log("[AniZone Lazy] POPULATION",seed.tmdb_id,seed.season,seed.episode,r&&r.status))
-      .catch(e=>console.log("[AniZone Lazy] POPULATION FAILED",String(e)))
-  }catch(e){
-    console.log("[AniZone Lazy] POPULATION LAUNCH FAILED",String(e))
-  }
-}
+async function dbMapping(tmdbId,season,episode){tmdbId=String(tmdbId||"").trim();if(!tmdbId)return null;const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&mediaType=tv&season="+season+"&episode="+episode,d=await json(u,{headers:{"Accept":"application/json"},},8000);if(d&&d.ok&&d.mapping){console.log("[AniZone Lazy] SHARED MAPPING",{tmdbId,season,episode,source:d.source});return{mapping:d.mapping,fromDb:d.source==="lazy-db"}}return null}
 
 function mapTitle(m){
   return String(m&&(m.anime_title||m.title||m.name||m.mal_title)||"").trim()
@@ -394,7 +349,6 @@ async function resolveStream(tmdbId,mediaType,season,episode){
 
   if(!movie){
     mappingResult=await dbMapping(tmdbId,season,episode);
-    if(!mappingResult)mappingResult=await fallbackMapping(tmdbId,season,episode);
     if(!mappingResult||!mappingResult.mapping){
       console.log("[AniZone Lazy] NO MAPPING AVAILABLE");
       return[]
@@ -408,17 +362,6 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     malId=mapMalId(m);
     seasonName=String(m.season_name||m.seasonName||"");
 
-    if(!mappingResult.fromDb){
-      triggerPopulation({
-        tmdb_id:String(m.tmdb_id||m.tmdbId||tmdbId),
-        imdb_id:imdbId,
-        mal_id:malId,
-        title,
-        season,
-        episode,
-        mal_episode:malEpisode
-      })
-    }
   }else{
     const info=await getTmdbInfo(tmdbId,"movie");
     if(!info||!info.title){
@@ -511,7 +454,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
 
       for(let i=1;i<buttons.length;i++){
         const btn=buttons[i];
-        const vm=String(attr(btn,"wire:click")||"").match(/setVideo\((\d+)\)/);
+        const vm=String(attr(btn,"wire:click")||"").match(/setVideo$begin:math:text$\(\\d\+\)$end:math:text$/);
         if(!vm)continue;
 
         const videoId=Number(vm[1]);
@@ -597,10 +540,15 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     }
   }
 
-  console.log("[AniZone Lazy] STREAMS FOUND",{title,slug,episode:malEpisode,count:streams.length});
-  return streams
+  console.log("[AniZone Lazy] STREAMS FOUND",{title,slug,episode:malEpisode,count:streams.length});persistSubtitles(tmdbId,season,episode,"anizone",streams);
+  return await mergeSharedSubs(tmdbId,season,episode,streams,"anizone")
 }
 
+
+const SUBTITLE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/shared-subtitles";
+async function sharedSubtitles(tmdbId,season,episode){try{const c=new AbortController(),t=setTimeout(()=>c.abort(),500),u=SUBTITLE_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode),r=await fetch(u,{headers:{Accept:"application/json","User-Agent":UA},signal:c.signal});clearTimeout(t);if(!r.ok)return[];const d=await r.json();return Array.isArray(d&&d.subtitles)?d.subtitles:[]}catch(e){return[]}}
+async function mergeSharedSubs(tmdbId,season,episode,streams,source){const shared=await Promise.race([sharedSubtitles(tmdbId,season,episode),new Promise(r=>setTimeout(()=>r([]),350))]);if(!shared.length)return streams||[];return(streams||[]).map(s=>{const local=Array.isArray(s.subtitles)?s.subtitles:[];const hasLocal=!!s.subtitle||local.length;const merged=[...local];for(const x of shared){if(!merged.some(y=>y&&y.url===x.url))merged.push({url:x.url,name:x.name||"English",language:x.language||"en",format:x.format||"vtt",headers:x.headers||{}})}return hasLocal?{...s,subtitles:merged}:{...s,subtitles:merged,subtitle:shared[0].url,subtitleFormat:shared[0].format||"vtt"}})}
+function persistSubtitles(tmdbId,season,episode,source,streams){try{const subtitles=[];for(const s of streams||[]){if(s&&s.subtitle)subtitles.push({url:s.subtitle,name:"English",language:"en",format:s.subtitleFormat||"vtt",headers:s.headers||{}});for(const x of s&&s.subtitles||[])if(x&&x.url)subtitles.push(x)}if(!subtitles.length)return;void fetch(SUBTITLE_URL,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify({tmdbId:String(tmdbId),season:Number(season)||1,episode:Number(episode)||1,source,subtitles})}).catch(()=>{})}catch(e){}}
 async function getStreams(tmdbId,mediaType,season,episode,settings){
   try{
     return await resolveStream(
