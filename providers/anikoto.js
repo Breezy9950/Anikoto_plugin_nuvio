@@ -25,7 +25,13 @@ function uniq(a){return [...new Set((a||[]).filter(Boolean).map(String))]}
 function norm(v){return String(v||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g,"")}
 function clean(v){return typeof v==="string"?v.replace(/\\/g,""):v}
 
-async function getMapping(id,s,e){return memo("anikoto:mapping:"+id+":"+s+":"+e,MAP_TTL,async()=>{const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(id)+"&season="+encodeURIComponent(s)+"&episode="+encodeURIComponent(e),d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},7000);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=ints(m.mal_episode||m.target_episode);return mal&&ep?{malId:mal,malEpisode:ep,title:String(m.anime_title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}:null})}
+async function getMapping(id,s,e){return memo("anikoto:mapping:"+id+":"+s+":"+e,MAP_TTL,async()=>{const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(id)+"&season="+encodeURIComponent(s)+"&episode="+encodeURIComponent(e),d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},3000);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=ints(m.mal_episode||m.target_episode);return mal&&ep?{malId:mal,malEpisode:ep,title:String(m.anime_title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}:null})}
+
+const LAZY_MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",TMDB_API="https://api.themoviedb.org/3",TMDB_KEY="68e094699525b18a70bab2f86b1fa706";
+async function lazyMapping(id,s,e){try{const u=LAZY_MAPPING_URL+"?tmdb_id="+encodeURIComponent(id)+"&tmdbId="+encodeURIComponent(id)+"&season="+s+"&episode="+e,d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},2500);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=ints(m.mal_episode||m.target_episode);return mal&&ep?{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],source:"lazy"}:null}catch(e){return null}}
+async function resolveTmdbId(id,type){id=String(id||"").trim();if(/^\d+$/.test(id)||!/^tt\d+$/i.test(id))return id;try{const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results",d=await json(TMDB_API+"/find/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&external_source=imdb_id",{headers:{"Accept":"application/json","User-Agent":UA}},2500);const a=d&&Array.isArray(d[t])?d[t]:[];return a[0]&&a[0].id?String(a[0].id):id}catch(e){return id}}
+async function tmdbInfo(id,type){try{const t=String(type||"tv").toLowerCase()==="movie"?"movie":"tv",d=await json(TMDB_API+"/"+t+"/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&language=en-US",{headers:{"Accept":"application/json","User-Agent":UA}},2500);if(!d)return null;return{title:String(d.name||d.title||d.original_name||d.original_title||"").trim(),originalTitle:String(d.original_name||d.original_title||"").trim()}}catch(e){return null}}
+async function resolveMap(id,s,e){const lazy=await lazyMapping(id,s,e);if(lazy){log("Lazy mapper HIT TMDB="+id+" S"+s+"E"+e+" -> MAL="+lazy.malId+" E"+lazy.malEpisode);return lazy}const shinkro=await getMapping(id,s,e);if(shinkro){log("Shinkro mapper HIT TMDB="+id+" S"+s+"E"+e+" -> MAL="+shinkro.malId+" E"+shinkro.malEpisode);return shinkro}return null}
 
 async function searchAnime(q){if(!q)return[];return memo("anikoto:search:"+String(q).toLowerCase(),MAP_TTL,async()=>{const d=await json(AJAX_URL+"/anime/search?keyword="+encodeURIComponent(q),{headers:HEADERS});const h=d&&d.result&&d.result.html;if(!h)return[];const root=parseHTML(h),box=first(root,"div.scaff.items"),out=[];if(!box)return out;for(const n of box.c){if(!n.a||!n.a.href)continue;const t=first(n,".name.d-title");if(t)out.push({title:nodeText(t),url:new URL(n.a.href,ANIKOTO_URL).href,image:(first(n,"img")||{a:{}}).a.src||""})}return out})}
 
@@ -33,7 +39,7 @@ function rank(rs,titles){const ts=uniq(titles).map(norm).filter(Boolean);return 
 
 async function episodes(animeUrl){return memo("anikoto:episodes:"+animeUrl,SERVER_TTL,async()=>{const h=await text(animeUrl,{headers:HEADERS});if(!h)return null;const r=parseHTML(h),w=first(r,"#watch-main"),id=w&&val(w,"data-id");if(!id)return null;const d=await json(AJAX_URL+"/episode/list/"+encodeURIComponent(id)+"?vrf=",{headers:HEADERS});const eh=d&&d.result;if(!eh)return null;const er=parseHTML(eh),out=[];for(const a of all(er,"a")){const id=val(a,"data-ids"),num=ints(val(a,"data-num"));if(!num)continue;out.push({episodeId:id,href:val(a,"href"),malId:val(a,"data-mal")||null,episodeNumber:num,title:val(a,"title"),dub:val(a,"data-dub")==="1",filler:hasClass(a,"filler")})}return out})}
 
-async function findEpisode(m){const qs=uniq([m.title,...m.titles]),allr=[];const searchResults=await settled(qs.map(q=>()=>searchAnime(q)),EXTRACT_TIMEOUT);for(const r of searchResults)for(const x of r||[])if(!allr.some(y=>y.url===x.url))allr.push(x);const candidates=rank(allr,qs).slice(0,10),checks=await settled(candidates.map(c=>async()=>{const es=await episodes(c.url);if(!es)return null;const e=es.find(x=>x.malId===m.malId&&x.episodeNumber===m.malEpisode&&x.episodeId);return e?{candidate:c,episode:e,episodes:es}:null}),EXTRACT_TIMEOUT);return checks.find(Boolean)||null}
+async function findEpisode(m){const qs=uniq([m.title,...m.titles]),allr=[];const searchResults=await settled(qs.map(q=>()=>searchAnime(q)),EXTRACT_TIMEOUT);for(const r of searchResults)for(const x of r||[])if(!allr.some(y=>y.url===x.url))allr.push(x);const candidates=rank(allr,qs).slice(0,10),checks=await settled(candidates.map(c=>async()=>{const es=await episodes(c.url);if(!es)return null;const e=es.find(x=>(m.malId?x.malId===m.malId&&x.episodeNumber===m.malEpisode:x.episodeNumber===m.malEpisode)&&x.episodeId);return e?{candidate:c,episode:e,episodes:es}:null}),EXTRACT_TIMEOUT);return checks.find(Boolean)||null}
 
 async function kiwi(mal,ep){const u=MAPPER_URL+"/api/mal/"+encodeURIComponent(mal)+"/"+encodeURIComponent(ep)+"/"+Math.floor(Date.now()/1000),d=await json(u,{headers:HEADERS});return d&&d["Kiwi-Stream-"]||null}
 
@@ -58,7 +64,7 @@ function aesDecBlock(block,key){const s=new Uint8Array(block),k=aesKey(key),nr=k
 function aesCbcDec(data,key,iv){if(data.length%16)throw new Error("Invalid AES ciphertext");const o=new Uint8Array(data.length);let prev=iv.slice();for(let p=0;p<data.length;p+=16){const b=aesDecBlock(data.slice(p,p+16),key);for(let i=0;i<16;i++)o[p+i]=b[i]^prev[i];prev=data.slice(p,p+16)}const pad=o[o.length-1];if(!pad||pad>16)throw new Error("Invalid PKCS7 padding");for(let i=o.length-pad;i<o.length;i++)if(o[i]!==pad)throw new Error("Invalid PKCS7 padding");return o.slice(0,o.length-pad)}
 
 function utf8enc(s){const e=encodeURIComponent(String(s)),a=[];for(let i=0;i<e.length;){if(e[i]==="%"){a.push(parseInt(e.slice(i+1,i+3),16));i+=3}else a.push(e.charCodeAt(i++))}return new Uint8Array(a)}
-const SHA_K=[1116352408,1899447441,3049327441,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162072063,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,3382418951,666307205,773529912,1294757372,1396182291,1695183700,2177026350,2456956037,2730485921,2820302411,3259734187,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873772,1537002063,1747873772,2024104815,2227730452,2428436474,2756734187,3204031479,3329325298];
+const SHA_K=[1116352408,1899447441,3049327441,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162072063,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,1555081692,1747873772,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,3382418951,666307205,773529912,1294757372,1396183700,1695183700,2177026350,2456956037,2730485921,2820302411,3259734187,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873772,1537002063,1747873772,2024104815,2227730452,2428436474,2756734187,3204031479,3329325298];
 const SHA_H=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225];
 function sha256(m){const a=m instanceof Uint8Array?m:utf8enc(m),l=a.length,n=(((l+9+63)>>6)<<6),b=new Uint8Array(n);b.set(a);b[l]=128;const bits=l*8;for(let i=0;i<8;i++)b[n-1-i]=(bits/(2**(8*i)))&255;let h=SHA_H.slice();const w=new Uint32Array(64);for(let p=0;p<n;p+=64){for(let i=0;i<16;i++)w[i]=(b[p+4*i]<<24)|(b[p+4*i+1]<<16)|(b[p+4*i+2]<<8)|b[p+4*i+3];for(let i=16;i<64;i++){const x=w[i-15],y=w[i-2],s0=((x>>>7)|(x<<25))^((x>>>18)|(x<<14))^(x>>>3),s1=((y>>>17)|(y<<15))^((y>>>19)|(y<<13))^(y>>>10);w[i]=(w[i-16]+s0+w[i-7]+s1)>>>0}let[a0,a1,a2,a3,a4,a5,a6,a7]=h;for(let i=0;i<64;i++){const S1=((a4>>>6)|(a4<<26))^((a4>>>11)|(a4<<21))^((a4>>>25)|(a4<<7)),ch=(a4&a5)^(~a4&a6),t1=(a7+S1+ch+SHA_K[i]+w[i])>>>0,S0=((a0>>>2)|(a0<<30))^((a0>>>13)|(a0<<19))^((a0>>>22)|(a0<<10)),maj=(a0&a1)^(a0&a2)^(a1&a2),t2=(S0+maj)>>>0;a7=a6;a6=a5;a5=a4;a4=(a3+t1)>>>0;a3=a2;a2=a1;a1=a0;a0=(t1+t2)>>>0}h[0]=(h[0]+a0)>>>0;h[1]=(h[1]+a1)>>>0;h[2]=(h[2]+a2)>>>0;h[3]=(h[3]+a3)>>>0;h[4]=(h[4]+a4)>>>0;h[5]=(h[5]+a5)>>>0;h[6]=(h[6]+a6)>>>0;h[7]=(h[7]+a7)>>>0}const o=new Uint8Array(32);for(let i=0;i<8;i++){o[4*i]=h[i]>>>24;o[4*i+1]=h[i]>>>16;o[4*i+2]=h[i]>>>8;o[4*i+3]=h[i]}return o}
 function hmac256(key,msg){let k=utf8enc(key),m=msg instanceof Uint8Array?msg:utf8enc(msg);if(k.length>64)k=sha256(k);const p=new Uint8Array(64),q=new Uint8Array(64);p.fill(54);q.fill(92);for(let i=0;i<k.length;i++){p[i]^=k[i];q[i]^=k[i]}const z=new Uint8Array(p.length+m.length);z.set(p);z.set(m,p.length);const ih=sha256(z),z2=new Uint8Array(q.length+ih.length);z2.set(q);z2.set(ih,q.length);return sha256(z2)}
@@ -74,7 +80,47 @@ async function extractMegaplay(u,server){const h=await text(u,{headers:HEADERS})
 
 async function extract(u,server){try{const h=new URL(u).hostname.toLowerCase().split(".")[0];if(h==="vidtube")return await extractVidtube(u,server);if(h==="megaplay")return await extractMegaplay(u,server);log("Unsupported extractor host: "+h);return[]}catch(e){log("Extractor "+(server||"unknown")+" failed: "+e.message);return[]}}
 
-async function streamsForEpisode(id,mal,ep,dub){const key="anikoto:streams:"+id+":"+(dub?1:0),hit=CACHE.get(key);if(hit!==undefined){const v=await hit;return v.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)}const p=(async()=>{const kp=kiwi(mal,ep).catch(()=>null),servers=await serverLinks(id,dub),kd=await kp;if(kd&&kd.sub&&kd.sub.url)servers.push({name:"Kiwi",linkId:String(kd.sub.url),groupName:"Kiwi"});if(!servers.length)return[];const urls=await settled(servers.map(s=>async()=>{try{const u=await serverUrl(s.linkId);return u?{s,u}:null}catch(e){log("Server URL "+s.name+" failed: "+e.message);return null}}),EXTRACT_TIMEOUT),extracted=await settled(urls.map(x=>async()=>{if(!x)return[];try{return await extract(x.u,x.s.name)}catch(e){log("Server "+x.s.name+" failed: "+e.message);return[]}}),EXTRACT_TIMEOUT),out=[];for(const got of extracted){for(const item of got||[]){if(item&&item._megaplayBase)item.url=item._megaplayBase;out.push(item)}}return out})();CACHE.set(key,p,STREAM_TTL);try{const out=await p;CACHE.set(key,out,STREAM_TTL);return out.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)}catch(e){CACHE.delete(key);throw e}}
+async function streamsForEpisode(id,mal,ep,dub){const key="anikoto:streams:"+id+":"+(dub?1:0),hit=CACHE.get(key);if(hit!==undefined){const v=await hit;return v.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)}const p=(async()=>{const kp=mal?kiwi(mal,ep).catch(()=>null):Promise.resolve(null),servers=await serverLinks(id,dub),kd=await kp;if(kd&&kd.sub&&kd.sub.url)servers.push({name:"Kiwi",linkId:String(kd.sub.url),groupName:"Kiwi"});if(!servers.length)return[];const urls=await settled(servers.map(s=>async()=>{try{const u=await serverUrl(s.linkId);return u?{s,u}:null}catch(e){log("Server URL "+s.name+" failed: "+e.message);return null}}),EXTRACT_TIMEOUT),extracted=await settled(urls.map(x=>async()=>{if(!x)return[];try{return await extract(x.u,x.s.name)}catch(e){log("Server "+x.s.name+" failed: "+e.message);return[]}}),EXTRACT_TIMEOUT),out=[];for(const got of extracted){for(const item of got||[]){if(item&&item._megaplayBase)item.url=item._megaplayBase;out.push(item)}}return out})();CACHE.set(key,p,STREAM_TTL);try{const out=await p;CACHE.set(key,out,STREAM_TTL);return out.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)}catch(e){CACHE.delete(key);throw e}}
 
-async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{const id=String(tmdbId||"").trim(),s=ints(season)||1,e=ints(episode)||1;if(!id||String(mediaType).toLowerCase()!=="tv")return[];const m=await getMapping(id,s,e);if(!m){log("No mapping for TMDB="+id+" S"+s+"E"+e);return[]}log("TMDB="+id+" S"+s+"E"+e+" -> MAL="+m.malId+" E"+m.malEpisode);const hit=await findEpisode(m);if(!hit){log("AniKoto episode not found for MAL="+m.malId+" E"+m.malEpisode);return[]}const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub),out=await streamsForEpisode(hit.episode.episodeId,m.malId,m.malEpisode,dub);log("Streams found: "+out.length);return out}catch(e){log("Fatal: "+e.message);return[]}}
+async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
+  const type=String(mediaType||"tv").toLowerCase();
+  const rawId=String(tmdbId||"").trim(),id=await resolveTmdbId(rawId,type),s=ints(season)||1,e=ints(episode)||1;
+  if(!id)return[];
+  const deadline=Date.now()+14500;
+  const mapped=async()=>{
+    const tryOne=async m=>{
+      if(!m)return null;
+      const hit=await findEpisode(m);
+      if(!hit)return null;
+      const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
+      const out=await streamsForEpisode(hit.episode.episodeId,m.malId,m.malEpisode,dub);
+      return out&&out.length?out:null
+    };
+    const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
+    let m=await lazyMapping(id,mapSeason,mapEpisode),out=await tryOne(m);
+    if(out)return out;
+    if(m)log("Lazy mapped stream failed; trying Shinkro");
+    m=await getMapping(id,mapSeason,mapEpisode);out=await tryOne(m);
+    if(out)return out;
+    if(m)log("Shinkro mapped stream failed; trying original scraping");
+    return null
+  };
+  try{
+    const out=await timeout(mapped(),Math.min(9000,Math.max(500,deadline-Date.now())));
+    if(out&&out.length)return out
+  }catch(e){log("Mapped path failed: "+e.message)}
+  const fallback=async()=>{
+    const info=await tmdbInfo(id,type);
+    if(!info||!info.title)return[];
+    const title=info.title,titles=info.originalTitle&&norm(info.originalTitle)!==norm(title)?[info.originalTitle]:[];
+    const fm={malId:"",malEpisode:type==="movie"?1:e,title,titles:uniq(titles)};
+    const hit=await findEpisode(fm);
+    if(!hit){log("Original AniKoto fallback episode not found for "+title);return[]}
+    const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
+    const out=await streamsForEpisode(hit.episode.episodeId,"",hit.episode.episodeNumber,dub);
+    log("Original AniKoto fallback streams: "+out.length);
+    return out||[]
+  };
+  try{return await timeout(fallback(),Math.max(100,deadline-Date.now()))}catch(e){log("AniKoto deadline reached: "+e.message);return[]}
+}
 module.exports={getStreams};
