@@ -51,7 +51,7 @@ function match(n,sel){
   if(sel[0]==="#")return n.attrs.id===sel.slice(1);
   if(sel[0]===".")return String(n.attrs.class||"").split(/\s+/).includes(sel.slice(1));
   if(sel[0]==="["){
-    const m=sel.match(/^$begin:math:display$\(\[\^\\$end:math:display$=~*^$]+)(?:([~*^$]?=)["']?([^"'\\]]+)["']?)?\]$/);
+    const m=sel.match(/^\[([^\\]=~*^$]+)(?:([~*^$]?=)["']?([^"'\\]]+)["']?)?\]$/);
     if(!m)return false;
     const v=n.attrs[m[1]];
     if(v==null)return false;
@@ -95,15 +95,15 @@ function sanitizeJson(s){
     .replace(/\\&/g,"&")
     .replace(/\\0/g,"\\u0000")
     .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>"\\u00"+h)
-    .replace(/\$begin:math:text$\?\!\[\"\\\\\/bfnrt\]\|u\[0\-9a\-fA\-F\]\{4\}\)\/g\,\"\"\)
-\}
+    .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g,"")
+}
 
-function decodeJSON\(s\)\{
-  try\{return JSON\.parse\(sanitizeJson\(s\)\)\}catch\(e\)\{return null\}
-\}
+function decodeJSON(s){
+  try{return JSON.parse(sanitizeJson(s))}catch(e){return null}
+}
 
-function parseCards\(html\)\{
-  const cards\=\[\]\,src\=String\(html\|\|\"\"\)\,m\=src\.match\(\/items\:\\s\*JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/);
+function parseCards(html){
+  const cards=[],src=String(html||""),m=src.match(/items:\s*JSON\.parse\('((?:[^'\\]|\\.)*)'\)/);
   if(m){
     const d=decodeJSON(m[1]);
     if(Array.isArray(d)){
@@ -133,7 +133,7 @@ function parseCards\(html\)\{
       const t=nodeText(a).trim();
       if(t)titles.add(t)
     }
-    const jm=xd.match(/JSON\.parse$begin:math:text$\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/);
+    const jm=xd.match(/JSON\.parse\('((?:[^'\\]|\\.)*)'\)/);
     if(jm){
       const d=decodeJSON(jm[1]);
       if(d&&typeof d==="object")for(const t of Object.values(d))if(t)titles.add(String(t))
@@ -234,7 +234,7 @@ async function searchCards(q){
 }
 
 function parseVidstack(html){
-  const src=String(html||""),m=src.match(/vidstackPlayer$begin:math:text$JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$\)/);
+  const src=String(html||""),m=src.match(/vidstackPlayer\(JSON\.parse\('((?:[^'\\]|\\.)*)'\)\)/);
   if(m){
     const d=decodeJSON(m[1]);
     if(d&&d.src){
@@ -291,7 +291,7 @@ async function episodePage(slug,ep){
 async function getTmdbInfo(tmdbId,mediaType,season=1){
   const type=mediaType==="movie"?"movie":"tv";
   const url="https://api.themoviedb.org/3/"+type+"/"+encodeURIComponent(tmdbId)+"?api_key="+TMDB_API_KEY+"&language=en-US";
-  const d=await json(url,{headers:{"Accept":"application/json"}},2500);
+  const d=await json(url,{headers:{"Accept":"application/json"}},7000);
   if(!d)return null;
   return{
     title:d.name||d.title||d.original_name||d.original_title||"",
@@ -309,7 +309,7 @@ async function dbMapping(tmdbId,season,episode){
     return null
   }
   const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
-  const d=await json(u,{headers:{"Accept":"application/json"}},2500);
+  const d=await json(u,{headers:{"Accept":"application/json"}},8000);
   if(d&&d.ok&&d.mapping){
     console.log("[AniZone Lazy] DB HIT",{tmdbId,season,episode});
     return{mapping:d.mapping,fromDb:true}
@@ -318,20 +318,13 @@ async function dbMapping(tmdbId,season,episode){
   return null
 }
 
-async function shinkroMapping(tmdbId,season,episode){
-  const u="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping?tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
-  const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},3000);
-  if(!d||!d.ok||!d.mapping)return null;
-  return{mapping:d.mapping,fromDb:false,source:"shinkro"}
-}
-
 async function fallbackMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
   season=Number(season)||1;
   episode=Number(episode)||1;
   if(!tmdbId)return null;
   const u=MAPPING_URL+"?resolve=1&tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
-  const d=await json(u,{headers:{"Accept":"application/json"}},5000);
+  const d=await json(u,{headers:{"Accept":"application/json"}},20000);
   if(d&&d.ok&&d.mapping){
     console.log("[AniZone Lazy] FALLBACK HIT",{tmdbId,season,episode});
     return{mapping:d.mapping,fromDb:false}
@@ -353,8 +346,6 @@ function triggerPopulation(seed){
     console.log("[AniZone Lazy] POPULATION LAUNCH FAILED",String(e))
   }
 }
-
-async function resolveTmdbId(id,type){id=String(id||"").trim();if(/^\d+$/.test(id)||!/^tt\d+$/i.test(id))return id;try{const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results",d=await json("https://api.themoviedb.org/3/find/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_API_KEY)+"&external_source=imdb_id",{headers:{"Accept":"application/json"}},2500),a=d&&Array.isArray(d[t])?d[t]:[];return a[0]&&a[0].id?String(a[0].id):id}catch(e){return id}}
 
 function mapTitle(m){
   return String(m&&(m.anime_title||m.title||m.name||m.mal_title)||"").trim()
@@ -386,7 +377,58 @@ function cleanQuery(s){
   return String(s||"").split(":")[0].replace(/season.*|\d+(?:st|nd|rd|th)\s+season|saison.*/i,"").trim()
 }
 
-async function extractTarget(title,targetTitles,season,movie,malEpisode,altTitles=[],seasonName=""){
+async function resolveStream(tmdbId,mediaType,season,episode){
+  tmdbId=String(tmdbId||"").trim();
+  mediaType=String(mediaType||"tv").toLowerCase();
+  season=Number(season)||1;
+  episode=Number(episode)||1;
+  if(!tmdbId){
+    console.log("[AniZone Lazy] ABORT EMPTY TMDB ID");
+    return[]
+  }
+
+  console.log("[AniZone Lazy] REQUEST",{tmdbId,mediaType,season,episode});
+
+  const movie=mediaType==="movie";
+  let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="";
+
+  if(!movie){
+    mappingResult=await dbMapping(tmdbId,season,episode);
+    if(!mappingResult)mappingResult=await fallbackMapping(tmdbId,season,episode);
+    if(!mappingResult||!mappingResult.mapping){
+      console.log("[AniZone Lazy] NO MAPPING AVAILABLE");
+      return[]
+    }
+
+    const m=mappingResult.mapping;
+    title=mapTitle(m);
+    targetTitles=mapTitles(m);
+    malEpisode=mapEp(m,episode);
+    imdbId=mapImdb(m);
+    malId=mapMalId(m);
+    seasonName=String(m.season_name||m.seasonName||"");
+
+    if(!mappingResult.fromDb){
+      triggerPopulation({
+        tmdb_id:String(m.tmdb_id||m.tmdbId||tmdbId),
+        imdb_id:imdbId,
+        mal_id:malId,
+        title,
+        season,
+        episode,
+        mal_episode:malEpisode
+      })
+    }
+  }else{
+    const info=await getTmdbInfo(tmdbId,"movie");
+    if(!info||!info.title){
+      console.log("[AniZone Lazy] MOVIE TMDB LOOKUP FAILED",tmdbId);
+      return[]
+    }
+    title=info.title;
+    if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
+  }
+
   if(!title&&targetTitles.length)title=targetTitles[0];
   if(!title){
     console.log("[AniZone Lazy] EMPTY TITLE AFTER MAPPING");
@@ -469,7 +511,7 @@ async function extractTarget(title,targetTitles,season,movie,malEpisode,altTitle
 
       for(let i=1;i<buttons.length;i++){
         const btn=buttons[i];
-        const vm=String(attr(btn,"wire:click")||"").match(/setVideo$begin:math:text$\(\\d\+\)$end:math:text$/);
+        const vm=String(attr(btn,"wire:click")||"").match(/setVideo\((\d+)\)/);
         if(!vm)continue;
 
         const videoId=Number(vm[1]);
@@ -557,47 +599,6 @@ async function extractTarget(title,targetTitles,season,movie,malEpisode,altTitle
 
   console.log("[AniZone Lazy] STREAMS FOUND",{title,slug,episode:malEpisode,count:streams.length});
   return streams
-}
-
-async function resolveStream(tmdbId,mediaType,season,episode){
-  mediaType=String(mediaType||"tv").toLowerCase();
-  tmdbId=await resolveTmdbId(String(tmdbId||"").trim(),mediaType);
-  season=Number(season)||1;
-  episode=Number(episode)||1;
-  if(!tmdbId)return[];
-  console.log("[AniZone Lazy] REQUEST",{tmdbId,mediaType,season,episode});
-  const movie=mediaType==="movie",deadline=Date.now()+14500;
-  const mapped=async()=>{
-    const tryOne=async r=>{
-      if(!r||!r.mapping)return null;
-      const m=r.mapping,title=mapTitle(m),targets=mapTitles(m),malEp=mapEp(m,episode),seasonName=String(m.season_name||m.seasonName||"");
-      if(!title)return null;
-      if(!r.fromDb)triggerPopulation({tmdb_id:String(m.tmdb_id||m.tmdbId||tmdbId),imdb_id:mapImdb(m),mal_id:mapMalId(m),title,season,episode,mal_episode:malEp});
-      const out=await extractTarget(title,targets,season,false,malEp,[],seasonName);
-      return out&&out.length?out:null
-    };
-    const mapSeason=movie?1:season,mapEpisode=movie?1:episode;
-    let r=await dbMapping(tmdbId,mapSeason,mapEpisode),out=await tryOne(r);
-    if(out)return out;
-    if(r)console.log("[AniZone Lazy] DB MAPPED STREAM FAILED; TRYING SHINKRO");
-    r=await shinkroMapping(tmdbId,mapSeason,mapEpisode);out=await tryOne(r);
-    if(out)return out;
-    if(r)console.log("[AniZone Lazy] SHINKRO MAPPED STREAM FAILED; TRYING ORIGINAL RESOLVER");
-    if(movie)return null;
-    r=await fallbackMapping(tmdbId,season,episode);out=await tryOne(r);
-    return out||null
-  };
-  try{
-    const out=await Promise.race([mapped(),new Promise((_,reject)=>setTimeout(()=>reject(new Error("mapped deadline")),Math.min(9000,Math.max(500,deadline-Date.now()))))]);
-    if(out&&out.length)return out
-  }catch(e){console.log("[AniZone Lazy] MAPPED PATH FAILED",String(e))}
-  const fallback=async()=>{
-    const info=await getTmdbInfo(tmdbId,mediaType);
-    if(!info||!info.title)return[];
-    const title=info.title,alts=info.originalTitle&&normalize(info.originalTitle)!==normalize(title)?[info.originalTitle]:[];
-    return extractTarget(title,[title,...alts],season,movie,movie?1:episode)
-  };
-  try{return await Promise.race([fallback(),new Promise((_,reject)=>setTimeout(()=>reject(new Error("fallback deadline")),Math.max(100,deadline-Date.now())))])}catch(e){console.log("[AniZone Lazy] DEADLINE",String(e));return[]}
 }
 
 async function getStreams(tmdbId,mediaType,season,episode,settings){
