@@ -41,6 +41,19 @@
       "formats":["m3u8"],
       "logo":"https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
       "contentLanguage":["en","ja"]
+    },
+    {
+      "id":"anizone-lazy",
+      "name":"AniZone Lazy",
+      "description":"AniZone anime streams with database-first TMDB-to-MAL mapping and lazy population",
+      "version":"1.0.0",
+      "author":"Nuvio Team",
+      "filename":"providers/anizone-lazy.js",
+      "supportedTypes":["tv"],
+      "enabled":true,
+      "formats":["m3u8"],
+      "logo":"https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
+      "contentLanguage":["en","ja"]
     }
   ]
 }
