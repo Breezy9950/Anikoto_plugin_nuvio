@@ -1,44 +1,24 @@
-const LAZY_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",NORMAL_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",TTL=86400000,MOVIE_TTL=300000,RESOLVE_TIMEOUT=5000,BG_TTL=30000;
-const STATE=globalThis.__ANIKOTO_SHARED_MAPPING__||(globalThis.__ANIKOTO_SHARED_MAPPING__={values:new Map(),inflight:new Map(),background:new Map()});
-function log(x){console.log("[SHARED MAPPING] "+x)}
-function valid(m){if(!m)return null;const mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||m.malEpisode||0);return mal&&Number.isInteger(ep)&&ep>0?{...m,mal_id:mal,mal_episode:ep}:null}
-async function req(url,timeout=5000,opt={}){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{...opt,headers:{Accept:"application/json","User-Agent":UA,...(opt.headers||{})},signal:c.signal});if(!r.ok)return null;return await r.json()}catch(e){return null}finally{clearTimeout(t)}}
-function cacheGet(k){const x=STATE.values.get(k);if(!x)return undefined;if(x.expires<=Date.now()){STATE.values.delete(k);return undefined}return x.value}
-function cacheSet(k,v,ttl){STATE.values.set(k,{value:v,expires:Date.now()+ttl});return v}
-function background(m,id,s,e,force=false){
-if(!m||!m.mal_id||(!force&&String(m.source||"")==="lazy-db"))return;
-const k=String(id)+":"+Number(s)+":"+Number(e),old=STATE.background.get(k);
-if(old&&old>Date.now())return;
-STATE.background.set(k,Date.now()+BG_TTL);
-try{void fetch(POPULATE_URL,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json","User-Agent":UA},body:JSON.stringify({tmdb_id:String(m.tmdb_id||id),imdb_id:m.imdb_id||"",mal_id:m.mal_id,title:m.anime_title||m.title||"",season:Number(s),episode:Number(e),mal_episode:Number(m.mal_episode)})}).catch(()=>{})}catch(e){}
-}
-async function resolve(id,type,s,e){
-type=String(type||"tv").toLowerCase();
-if(type==="movie"){
-const d=await req(LAZY_URL+"?tmdbId="+encodeURIComponent(id)+"&mediaType=movie",RESOLVE_TIMEOUT),m=valid(d&&d.mapping);
-if(m){log("MOVIE LAZY HIT TMDB="+id);return m}
-log("MOVIE LAZY MISS TMDB="+id);return null
-}
-const lazy=await req(LAZY_URL+"?tmdbId="+encodeURIComponent(id)+"&season="+encodeURIComponent(s)+"&episode="+encodeURIComponent(e),3000),lm=valid(lazy&&lazy.mapping);
-if(lm){
-log("LAZY DB HIT TMDB="+id+" S"+s+"E"+e);
-if(lazy&&lazy.population&&lazy.population.status!=="complete")background(lm,id,s,e,true);
-return lm
-}
-const resolved=await req(LAZY_URL+"?resolve=1&tmdbId="+encodeURIComponent(id)+"&season="+encodeURIComponent(s)+"&episode="+encodeURIComponent(e),RESOLVE_TIMEOUT),rm=valid(resolved&&resolved.mapping);
-if(rm){log("LAZY RESOLVED TMDB="+id+" S"+s+"E"+e);background(rm,id,s,e);return rm}
-const normal=await req(NORMAL_URL+"?tmdbId="+encodeURIComponent(id)+"&season="+encodeURIComponent(s)+"&episode="+encodeURIComponent(e),7000),nm=valid(normal&&normal.mapping);
-if(nm){log("NORMAL HIT TMDB="+id+" S"+s+"E"+e);background(nm,id,s,e);return nm}
-log("MAPPING MISS TMDB="+id+" S"+s+"E"+e);return null
-}
-async function getMapping(tmdbId,mediaType="tv",season=1,episode=1){
-const id=String(tmdbId||"").trim(),type=String(mediaType||"tv").toLowerCase(),s=type==="movie"?1:Number(season)||1,e=type==="movie"?1:Number(episode)||1;
-if(!id)return null;
-const k=type+":"+id+":"+s+":"+e,cached=cacheGet(k);
-if(cached!==undefined)return cached;
-if(STATE.inflight.has(k))return STATE.inflight.get(k);
-const p=resolve(id,type,s,e).then(v=>cacheSet(k,v,type==="movie"?MOVIE_TTL:TTL)).catch(err=>{log("ERROR "+id+": "+err.message);cacheSet(k,null,30000);return null}).finally(()=>STATE.inflight.delete(k));
-STATE.inflight.set(k,p);return p
-}
-function clearMappingCache(){STATE.values.clear();STATE.inflight.clear();STATE.background.clear()}
-module.exports={getMapping,clearMappingCache};
+const{getStore}=require("@netlify/blobs"),lazy=require("./anime-lazy-mapping.js");
+const LAZY_STORE="anime-lazy-resolution",MAPPING_URL=process.env.ANIME_MAPPING_URL||"https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping",TMDB_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706",CACHE_TTL=86400000,MOVIE_TTL=86400000,REQUEST_TIMEOUT=3500,MOVIE_BUDGET=5000;
+const cache=new Map(),inflight=new Map();
+function log(x){console.log(`[SHARED MAPPING] ${x}`)}
+function store(){return getStore({name:LAZY_STORE,siteID:process.env.NETLIFY_SITE_ID,token:process.env.NETLIFY_AUTH_TOKEN})}
+function valid(m){if(!m||typeof m!=="object")return false;const mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||m.episode||0);return/^\d+$/.test(mal)&&Number(mal)>0&&Number.isInteger(ep)&&ep>0}
+function normalize(m,source){if(!valid(m))return null;return{...m,mal_id:String(m.mal_id||m.malId),mal_episode:Number(m.mal_episode||m.target_episode||m.episode),source:source||m.source||"shared"}}
+async function fetchJson(url,timeout=REQUEST_TIMEOUT){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{headers:{Accept:"application/json","User-Agent":"AniKoto-Nuvio-Shared-Mapping/1.0"},signal:c.signal});if(!r.ok)return null;return await r.json()}catch(e){return null}finally{clearTimeout(t)}}
+async function dbLookup(id,s,e){try{const r=await store().get(`anime:${id}`,{type:"json",consistency:"strong"}),x=r&&r.seasons&&r.seasons[String(s)],v=x&&x.episodes&&x.episodes[String(e)];if(v&&Number(v.mal_episode)>0){const m={tmdb_id:id,imdb_id:r.imdb_id||null,mal_id:r.mal_id||null,anime_title:r.title||"",titles:r.titles||[],season:Number(s),episode:Number(e),mal_episode:Number(v.mal_episode),air_date:v.air_date||"",season_title:x.title||"",source:"lazy-db"};return valid(m)?m:null}}catch(e){}return null}
+async function lazyResolve(id,s,e){const m=await lazy.resolveMapping(id,s,e);return normalize(m,"lazy-resolver")}
+async function normalResolve(id,s,e){const u=`${MAPPING_URL}?tmdbId=${encodeURIComponent(id)}&season=${encodeURIComponent(s)}&episode=${encodeURIComponent(e)}`,d=await fetchJson(u,REQUEST_TIMEOUT);return d&&d.ok?normalize(d.mapping,"normal-mapper"):null}
+async function tvMapping(id,s,e){const key=`tv:${id}:${s}:${e}`,hit=cache.get(key);if(hit&&hit.expires>Date.now())return hit.value;const running=inflight.get(key);if(running)return running;const p=(async()=>{const db=await dbLookup(id,s,e);if(db){log(`LAZY DB HIT TMDB=${id} S${s}E${e}`);cache.set(key,{value:db,expires:Date.now()+CACHE_TTL});return db}const lazy=await lazyResolve(id,s,e);if(lazy){log(`LAZY RESOLVED TMDB=${id} S${s}E${e} -> MAL=${lazy.mal_id} E${lazy.mal_episode}`);cache.set(key,{value:lazy,expires:Date.now()+CACHE_TTL});return lazy}const normal=await normalResolve(id,s,e);if(normal){log(`NORMAL MAPPER HIT TMDB=${id} S${s}E${e} -> MAL=${normal.mal_id} E${normal.mal_episode}`);cache.set(key,{value:normal,expires:Date.now()+CACHE_TTL});return normal}return null})().finally(()=>inflight.delete(key));inflight.set(key,p);return p}
+function movieKey(id){return String(id||"").trim()}
+async function movieLookup(id){try{const r=await store().get(`anime:${id}`,{type:"json",consistency:"strong"}),m=r&&r.movies&&r.movies[movieKey(id)];if(valid(m)){log(`MOVIE HIT TMDB=${id}`);return m}}catch(e){}return null}
+async function tmdbExternal(id){return fetchJson(`https://api.themoviedb.org/3/movie/${encodeURIComponent(id)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,2500)}
+async function aniByTmdb(id,imdb){return fetchJson(imdb?`https://api.ani.zip/mappings?themoviedb_id=${encodeURIComponent(id)}&imdb_id=${encodeURIComponent(imdb)}`:`https://api.ani.zip/mappings?themoviedb_id=${encodeURIComponent(id)}`,2500)}
+async function aniByMal(mal){return fetchJson(`https://api.ani.zip/mappings?mal_id=${encodeURIComponent(mal)}`,2500)}
+async function jikan(mal){return fetchJson(`https://api.jikan.moe/v4/anime/${encodeURIComponent(mal)}`,2500)}
+async function arm(id,imdb){const urls=[imdb?`https://arm.haglund.dev/api/v2/imdb?id=${encodeURIComponent(imdb)}`:null,`https://arm.haglund.dev/api/v2/themoviedb?id=${encodeURIComponent(id)}`].filter(Boolean);const rs=await Promise.allSettled(urls.map(u=>fetchJson(u,2200)));const ids=[];for(const r of rs)if(r.status==="fulfilled"&&Array.isArray(r.value))for(const x of r.value||[])if(x&&x.myanimelist)ids.push(String(x.myanimelist));return[...new Set(ids)]}
+async function validateMovieCandidate(id,imdb,mal,raw){const n=String(mal||"").trim();if(!/^\d+$/.test(n)||Number(n)<1)return null;const[ani,jd]=await Promise.all([aniByMal(n),jikan(n)]);if(!ani||!ani.mappings||String(ani.mappings.mal_id||n)!==n||!jd||!jd.data)return null;return{tmdb_id:String(id),imdb_id:imdb||null,mal_id:n,mal_episode:1,anime_title:jd.data.title||raw?.title||"",titles:[jd.data.title,jd.data.title_english,jd.data.title_japanese].filter(Boolean).map(String),source:"movie"}}
+async function resolveMovie(id){const start=Date.now(),deadline=start+MOVIE_BUDGET,old=await movieLookup(id);if(old)return old;let ext=null;try{ext=await tmdbExternal(id)}catch(e){}const imdb=ext&&ext.imdb_id?String(ext.imdb_id):null,candidates=[],aniP=aniByTmdb(id,imdb),armP=arm(id,imdb),settled=await Promise.allSettled([aniP,armP]),a=settled[0].status==="fulfilled"?settled[0].value:null,arms=settled[1].status==="fulfilled"?settled[1].value:[];if(a&&a.mappings&&a.mappings.mal_id)candidates.push(String(a.mappings.mal_id));candidates.push(...arms);for(const mal of[...new Set(candidates)]){if(Date.now()>=deadline)break;const left=deadline-Date.now(),p=validateMovieCandidate(id,imdb,mal,a&&a.mappings),v=await Promise.race([p,new Promise(r=>setTimeout(()=>r(null),Math.max(1,left)))]);if(v){try{const s=store(),r=await s.get(`anime:${id}`,{type:"json",consistency:"strong"}),next={...(r||{tmdb_id:String(id),imdb_id:imdb,movies:{},seasons:{},population:{}}),tmdb_id:String(id),imdb_id:(r&&r.imdb_id)||imdb,movies:{...((r&&r.movies)||{}),[movieKey(id)]:v},updatedAt:Date.now()};const bytes=Buffer.byteLength(JSON.stringify(next));if(bytes<4.5*1024*1024*1024)await s.setJSON(`anime:${id}`,next);else log(`MOVIE WRITE SKIPPED oversized TMDB=${id}`)}catch(e){log(`MOVIE WRITE FAILED TMDB=${id}: ${e.message}`)}return v}}log(`MOVIE RESOLUTION FAILED TMDB=${id}`);return null}
+async function getMapping({tmdbId,mediaType="tv",season=1,episode=1}){const id=String(tmdbId||"").trim(),type=String(mediaType||"tv").toLowerCase(),s=Number(season)||1,e=Number(episode)||1;if(!id)return null;if(type==="movie")return resolveMovie(id);return tvMapping(id,s,e)}
+exports.handler=async event=>{const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),type=String(p.mediaType||p.type||"tv").toLowerCase(),s=Number(p.season)||1,e=Number(p.episode)||1;if((event.httpMethod||"GET").toUpperCase()==="OPTIONS")return{statusCode:204,headers:{"Access-Control-Allow-Origin":"*"}};if(!id)return{statusCode:400,body:JSON.stringify({ok:false,error:"tmdbId required"})};try{const m=type==="movie"?await Promise.race([getMapping({tmdbId:id,mediaType:type,season:s,episode:e}),new Promise(r=>setTimeout(()=>r(null),MOVIE_BUDGET))]):await getMapping({tmdbId:id,mediaType:type,season:s,episode:e});return m?{statusCode:200,headers:{"Content-Type":"application/json","Cache-Control":"no-store","Access-Control-Allow-Origin":"*"},body:JSON.stringify({ok:true,source:m.source,mapping:m})}:{statusCode:404,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"},body:JSON.stringify({ok:false,mapping:null})}}catch(e){console.error("[SHARED MAPPING] FATAL",e);return{statusCode:500,headers:{"Content-Type":"application/json","Access-Control-Allow-Origin":"*"},body:JSON.stringify({ok:false,error:e.message||"Mapping service error"})}}};
+exports.getMapping=getMapping;
