@@ -1,6 +1,6 @@
-const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
+const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping",LAZY_MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
 function log(x){console.log("[AniZone] "+x)}
-async function req(url,opt,timeoutMs=5000){opt=opt||{};const c=new AbortController(),t=setTimeout(()=>c.abort(),timeoutMs);try{return await fetch(url,Object.assign({},opt,{signal:c.signal}))}finally{clearTimeout(t)}}
+async function req(url,opt){opt=opt||{};const c=new AbortController(),t=setTimeout(()=>c.abort(),15000);try{return await fetch(url,Object.assign({},opt,{signal:c.signal}))}finally{clearTimeout(t)}}
 async function text(url,opt){try{const r=await req(url,opt);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.text()}catch(e){log("Request failed "+url+": "+e.message);return null}}
 async function json(url,opt){try{const r=await req(url,opt);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.json()}catch(e){log("JSON request failed "+url+": "+e.message);return null}}
 function attrs(s){const o={};let i=0,n=String(s||"");while(i<n.length){while(i<n.length&&/[\s\/]/.test(n[i]))i++;let k="";while(i<n.length&&/[^\s=\/>]/.test(n[i]))k+=n[i++];if(!k)break;while(i<n.length&&/\s/.test(n[i]))i++;let v="";if(n[i]==="="){i++;while(i<n.length&&/\s/.test(n[i]))i++;if(n[i]==='"'||n[i]==="'"){const q=n[i++];while(i<n.length&&n[i]!==q)v+=n[i++];if(n[i]===q)i++}else while(i<n.length&&!/[\s>]/.test(n[i]))v+=n[i++]}o[k.toLowerCase()]=v}return o}
@@ -15,12 +15,25 @@ function first(n,sel){return all(n,sel,[])[0]||null}
 function nodeText(n){let s=n&&n.t||"";for(const x of children(n))s+=nodeText(x);return unesc(s).replace(/\s+/g," ").trim()}
 function dataAttr(n,k){return n&&n.a&&n.a[k.toLowerCase()]||""}
 function decodeJSON(s){try{return JSON.parse(String(s||"").replace(/\\u0022/g,'"'))}catch(e){log("JSON decode failed: "+e.message);return null}}
-function extractJSONParse(s){const m=/JSON\.parse$begin:math:text$\'\(\.\+\?\)\'$end:math:text$/s.exec(String(s||""));return m?decodeJSON(m[1]):null}
-async function mapping(tmdbId,season,episode){const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode),d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}});if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);if(!mal||!ep)return null;return{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}}
-const LAZY_MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",TMDB_API="https://api.themoviedb.org/3",TMDB_KEY="68e094699525b18a70bab2f86b1fa706";
-async function lazyMapping(tmdbId,season,episode){const d=await json(LAZY_MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode,{headers:{"Accept":"application/json","User-Agent":UA}},2500);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);if(!mal||!ep)return null;return{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}}
-async function resolveTmdbId(id,type){id=String(id||"").trim();if(/^\d+$/.test(id)||!/^tt\d+$/i.test(id))return id;try{const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results",d=await json(TMDB_API+"/find/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&external_source=imdb_id",{headers:{"Accept":"application/json","User-Agent":UA}},2500);const a=d&&Array.isArray(d[t])?d[t]:[];return a[0]&&a[0].id?String(a[0].id):id}catch(e){return id}}
-async function tmdbInfo(tmdbId,type){const t=String(type||"tv").toLowerCase()==="movie"?"movie":"tv",d=await json(TMDB_API+"/"+t+"/"+encodeURIComponent(tmdbId)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&language=en-US",{headers:{"Accept":"application/json","User-Agent":UA}},2500);if(!d)return null;return{title:String(d.name||d.title||d.original_name||d.original_title||"").trim(),originalTitle:String(d.original_name||d.original_title||"").trim()}}
+function extractJSONParse(s){const m=/JSON\.parse\('(.+?)'\)/s.exec(String(s||""));return m?decodeJSON(m[1]):null}
+async function mapping(tmdbId,season,episode){
+ const q="tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode);
+ let d=await json(LAZY_MAPPING_URL+"?"+q,{headers:{"Accept":"application/json","User-Agent":UA}});
+ if(d&&d.ok&&d.mapping){
+  const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||m.malEpisode||0);
+  if(mal&&ep){
+   log("Lazy mapping HIT -> MAL "+mal+" E"+ep);
+   return{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}
+  }
+ }
+ log("Lazy mapping MISS; falling back to existing anime-mapping");
+ d=await json(MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode),{headers:{"Accept":"application/json","User-Agent":UA}});
+ if(!d||!d.ok||!d.mapping)return null;
+ const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);
+ if(!mal||!ep)return null;
+ log("Existing anime-mapping -> MAL "+mal+" E"+ep);
+ return{malId:mal,malEpisode:ep,title:String(m.anime_title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}
+}
 async function search(query){query=String(query||"").trim();if(!query)return[];const url=BASE+"/anime?search="+encodeURIComponent(query),html=await text(url,{headers:{"Accept":"text/html,application/xhtml+xml","User-Agent":UA}});if(!html)return[];const root=parseHTML(html),main=first(root,"main");if(!main){log("Search: main not found");return[]}const kids=children(main);if(kids.length<2){log("Search: expected main child[1]");return[]}const data=dataAttr(kids[1],"x-data"),parsed=extractJSONParse(data);if(!Array.isArray(parsed)){log("Search: JSON.parse data not found");return[]}const out=[];for(const item of parsed){const title=item&&item.main_title,img=item&&item.cover,href=item&&item.url;if(title==null||img==null||href==null)continue;out.push({name:String(title),alias:String(href).replace(/\\/g,""),imageUrl:String(img)})}log("Search '"+query+"' -> "+out.length+" results");return out}
 function exactResult(results,query){return results.find(x=>String(x&&x.name||"")===String(query))||null}
 async function findAnime(m){
@@ -40,53 +53,7 @@ async function findAnime(m){
  }
  return fallback
 }
-async function getEpisodes(alias){const html=await text(alias,{headers:{"Accept":"text/html,application/xhtml+xml","User-Agent":UA}});if(!html)return[];const root=parseHTML(html),main=first(root,"main");if(!main)return[];const kids=children(main);if(!kids.length)return[];const data=dataAttr(kids[0],"x-data"),m=/items:\s*JSON\.parse$begin:math:text$\'\(\.\+\?\)\'$end:math:text$/s.exec(data||"");if(!m){log("Episodes: JSON.parse items not found");return[]}const list=decodeJSON(m[1]);if(!Array.isArray(list))return[];const out=[];let i=1;for(const item of list){if(!item||!item.url)continue;out.push({episodeLink:String(item.url).replace(/\\/g,""),episodeNumber:i,thumbnail:item.snapshot?String(item.snapshot).replace(/\\/g,""):"",episodeTitle:item.title_list&&item.title_list["1"],isFiller:String(item.type||"").toLowerCase()==="filler",hasDub:false});i++}log("Episodes: parsed "+out.length);return out}
+async function getEpisodes(alias){const html=await text(alias,{headers:{"Accept":"text/html,application/xhtml+xml","User-Agent":UA}});if(!html)return[];const root=parseHTML(html),main=first(root,"main");if(!main)return[];const kids=children(main);if(!kids.length)return[];const data=dataAttr(kids[0],"x-data"),m=/items:\s*JSON\.parse\('(.+?)'\)/s.exec(data||"");if(!m){log("Episodes: JSON.parse items not found");return[]}const list=decodeJSON(m[1]);if(!Array.isArray(list))return[];const out=[];let i=1;for(const item of list){if(!item||!item.url)continue;out.push({episodeLink:String(item.url).replace(/\\/g,""),episodeNumber:i,thumbnail:item.snapshot?String(item.snapshot).replace(/\\/g,""):"",episodeTitle:item.title_list&&item.title_list["1"],isFiller:String(item.type||"").toLowerCase()==="filler",hasDub:false});i++}log("Episodes: parsed "+out.length);return out}
 async function getEpisodeStream(episodeUrl){const html=await text(episodeUrl,{headers:{"Accept":"text/html,application/xhtml+xml","User-Agent":UA}});if(!html)return null;const root=parseHTML(html),div=first(root,"div.mb-8");if(!div)return null;const kids=children(div);if(!kids.length)return null;const data=dataAttr(kids[0],"x-data"),parsed=extractJSONParse(data);if(!parsed||!parsed.src){log("Stream: source not found");return null}const src=String(parsed.src).replace(/\\/g,""),subs=Array.isArray(parsed.subtitles)?parsed.subtitles:[],en=subs.find(x=>x&&x.language==="en"&&x.default===true),button=first(root,"button.flex.gap-2.relative");return{name:"AniZone",title:"AniZone • "+(button?nodeText(button):"Default"),url:src,quality:"multi-quality",headers:{"Referer":BASE+"/","User-Agent":UA},subtitle:en&&en.file?String(en.file).replace(/\\/g,""):"",subtitleFormat:en&&en.format?String(en.format):"",backup:false}}
-async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
-  const type=String(mediaType||"tv").toLowerCase();
-  const rawId=String(tmdbId||"").trim(),id=await resolveTmdbId(rawId,type),s=Number(season)||1,e=Number(episode)||1;
-  if(!id)return[];
-  const deadline=Date.now()+14500;
-  const mapped=async()=>{
-    const tryOne=async m=>{
-      if(!m)return null;
-      const anime=await findAnime(m);
-      if(!anime)return null;
-      const eps=await getEpisodes(anime.alias),ep=eps.find(x=>x.episodeNumber===m.malEpisode);
-      if(!ep)return null;
-      const stream=await getEpisodeStream(ep.episodeLink);
-      return stream?[stream]:null
-    };
-    const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
-    let m=await lazyMapping(id,mapSeason,mapEpisode),out=await tryOne(m);
-    if(out)return out;
-    if(m)log("Lazy mapped stream failed; trying Shinkro");
-    m=await mapping(id,mapSeason,mapEpisode);out=await tryOne(m);
-    if(out)return out;
-    return null
-  };
-  try{
-    const out=await Promise.race([mapped(),new Promise((_,reject)=>setTimeout(()=>reject(new Error("mapped deadline")),Math.min(9000,Math.max(500,deadline-Date.now()))))]);
-    if(out&&out.length)return out
-  }catch(e){log("Mapped path failed: "+e.message)}
-  const fallback=async()=>{
-    const info=await tmdbInfo(id,type);
-    if(!info||!info.title)return[];
-    const qs=[info.title];
-    if(info.originalTitle&&info.originalTitle!==info.title)qs.push(info.originalTitle);
-    if(type==="tv"&&s>1)qs.push(info.title+" season "+s);
-    let anime=null;
-    for(const q of qs){
-      const r=await search(q),exact=exactResult(r,q);
-      if(exact){anime=exact;break}
-      if(!anime&&r.length)anime=r[0]
-    }
-    if(!anime)return[];
-    const eps=await getEpisodes(anime.alias),target=type==="movie"?1:e,ep=eps.find(x=>x.episodeNumber===target);
-    if(!ep)return[];
-    const stream=await getEpisodeStream(ep.episodeLink);
-    return stream?[stream]:[]
-  };
-  try{return await Promise.race([fallback(),new Promise((_,reject)=>setTimeout(()=>reject(new Error("fallback deadline")),Math.max(100,deadline-Date.now())))])}catch(e){log("AniZone deadline reached: "+e.message);return[]}
-}
+async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const m=await mapping(tmdbId,season,episode);if(!m){log("No mapping");return[]}log("Mapping -> MAL "+m.malId+" E"+m.malEpisode+" "+m.title);const anime=await findAnime(m);if(!anime){log("Anime not found");return[]}log("Selected -> "+anime.name+" "+anime.alias);const eps=await getEpisodes(anime.alias);if(!eps.length){log("No episodes");return[]}const ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("MAL episode "+m.malEpisode+" not found in AniZone episode list ("+eps.length+" episodes)");return[]}log("Mapped episode -> "+ep.episodeNumber+" "+ep.episodeLink);const stream=await getEpisodeStream(ep.episodeLink);return stream?[stream]:[]}catch(e){log("Fatal: "+e.message);return[]}}
 module.exports={getStreams};
