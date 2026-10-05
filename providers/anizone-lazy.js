@@ -1,39 +1,635 @@
 const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"Referer":BASE+"/","User-Agent":UA},TIMEOUT=15000;
-function log(x){console.log("[AniZone Lazy] "+x)}
-class Cache{constructor(){this.m=new Map()}get(k){const x=this.m.get(k);if(!x)return;if(x.e<=Date.now()){this.m.delete(k);return}return x.v}set(k,v,ttl){this.m.set(k,{v,e:Date.now()+ttl});return v}}
-const CACHE=globalThis.__NUVIO_PROVIDER_CACHE__||(globalThis.__NUVIO_PROVIDER_CACHE__=new Cache()),MAP_TTL=86400000;
-async function req(url,opt,timeout=TIMEOUT){opt=opt||{};const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{return await fetch(url,Object.assign({},opt,{signal:c.signal}))}finally{clearTimeout(t)}}
-async function text(url,opt,timeout=TIMEOUT){try{const r=await req(url,opt,timeout);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.text()}catch(e){log("Request failed "+url+": "+e.message);return null}}
-async function json(url,opt,timeout=TIMEOUT){try{const r=await req(url,opt,timeout);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.json()}catch(e){log("JSON request failed "+url+": "+e.message);return null}}
-function attrs(s){const o={};String(s||"").replace(/([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g,(_,k,a,b,c)=>{o[k.toLowerCase()]=a!==undefined?a:b!==undefined?b:c!==undefined?c:"";return _});return o}
-const VOID={area:1,base:1,br:1,col:1,embed:1,hr:1,img:1,input:1,link:1,meta:1,param:1,source:1,track:1,wbr:1};
-function unesc(s){return String(s||"").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'").replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(+n)).replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCharCode(parseInt(n,16)))}
-function parseHTML(src){const root={tag:"root",a:{},c:[],t:""},st=[root],s=String(src||"");let i=0;while(i<s.length){if(s[i]!=="<"){let j=s.indexOf("<",i);if(j<0)j=s.length;st[st.length-1].t+=unesc(s.slice(i,j));i=j;continue}if(s.slice(i,i+4)==="<!--"){const j=s.indexOf("-->",i+4);i=j<0?s.length:j+3;continue}if(/^<!doctype/i.test(s.slice(i,i+10))){const j=s.indexOf(">",i+2);i=j<0?s.length:j+1;continue}if(s.slice(i,i+2)==="</"){const m=/^<\s*\/\s*([^\s>]+)/.exec(s.slice(i));if(m){const j=s.indexOf(">",i+m[0].length);i=j<0?s.length:j+1;for(let k=st.length-1;k>0;k--)if(st[k].tag===m[1].toLowerCase()){st.length=k;break}continue}}const m=/^<\s*([^\s/>]+)/.exec(s.slice(i));if(!m){i++;continue}let j=i+m[0].length,q=null;for(let k=j;k<s.length;k++){if(s[k]==="'"||s[k]==='"'){if(q===null)q=s[k];else if(q===s[k])q=null}else if(s[k]===">"&&q===null){j=k;break}}if(j<=i){i++;continue}const raw=s.slice(i,j+1),tag=m[1].toLowerCase(),a=attrs(raw.slice(m[0].length,-1)),n={tag,a,c:[],t:""};st[st.length-1].c.push(n);i=j+1;if(!VOID[tag]&&!/\/\s*>$/.test(raw)){st.push(n);if(tag==="script"||tag==="style"){const close=new RegExp("<\\/\\s*"+tag+"\\s*>","i"),tail=s.slice(i),cm=close.exec(tail);if(cm){n.t+=tail.slice(0,cm.index);i+=cm.index+cm[0].length;st.pop()}}}}return root}
-function children(n){return n&&Array.isArray(n.c)?n.c:[]}
-function hasClass(n,c){return(" "+String(n&&n.a&&n.a.class||"").replace(/\s+/g," ")+" ").indexOf(" "+c+" ")>=0}
-function match(n,sel){if(!n||n.tag==="root")return false;const tm=sel.match(/^[a-z0-9_-]+/i);if(tm&&n.tag!==tm[0].toLowerCase())return false;const im=sel.match(/#([a-z0-9_-]+)/i);if(im&&n.a.id!==im[1])return false;const cm=sel.match(/\.([a-z0-9_-]+)/gi)||[];for(const c of cm)if(!hasClass(n,c.slice(1)))return false;return true}
-function all(n,sel,o){o=o||[];for(const x of children(n)){if(match(x,sel))o.push(x);all(x,sel,o)}return o}
-function first(n,sel){return all(n,sel,[])[0]||null}
-function nodeText(n){let s=n&&n.t||"";for(const x of children(n))s+=nodeText(x);return unesc(s).replace(/\s+/g," ").trim()}
-function attr(n,k){return n&&n.a&&n.a[k.toLowerCase()]||""}
-function sanitizeJson(s){return String(s||"").replace(/\\u0022/g,'"').replace(/\\u0026/g,"&").replace(/\\'/g,"'").replace(/\\\//g,"/").replace(/\\\\/g,"\\").replace(/\\&/g,"&").replace(/\\0/g,"\\u0000").replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>"\\u00"+h).replace(/\$begin:math:text$\?\!\[\"\\\\\/bfnrt\]\|u\[0\-9a\-fA\-F\]\{4\}\)\/g\,\"\"\)\}
-function decodeJSON\(s\)\{try\{return JSON\.parse\(sanitizeJson\(s\)\)\}catch\(e\)\{return null\}\}
-function extractJSONParse\(s\)\{const m\=\/JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/s.exec(String(s||""));return m?decodeJSON(m[1]):null}
-function clean(v){return typeof v==="string"?v.replace(/\\/g,""):v}
-function uniq(a){return[...new Set((a||[]).filter(Boolean).map(String))]}
-function normalize(s){return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"").trim()}
-async function dbMapping(tmdbId,season,episode){const key=`azlazy:map:${tmdbId}:${season}:${episode}`,hit=CACHE.get(key);if(hit!==undefined)return hit;log(`DB lookup TMDB=${tmdbId} S${season}E${episode}`);const u=`${MAPPING_URL}?tmdbId=${encodeURIComponent(tmdbId)}&season=${encodeURIComponent(season)}&episode=${encodeURIComponent(episode)}`,d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},7000);if(!d||!d.ok||!d.mapping){log("DB miss");return null}const m=d.mapping,mal=String(m.mal_id||"").trim(),ep=Number(m.mal_episode||0);if(!mal||!ep)return null;const out={malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],seasonTitle:String(m.season_title||"").trim(),imdbId:String(m.imdb_id||"").trim()};CACHE.set(key,out,MAP_TTL);log(`DB hit MAL=${mal} E${ep}`);return out}
-async function fallbackMapping(tmdbId,season,episode){log(`Fallback mapping TMDB=${tmdbId} S${season}E${episode}`);const u=`${MAPPING_URL}?resolve=1&tmdbId=${encodeURIComponent(tmdbId)}&season=${encodeURIComponent(season)}&episode=${encodeURIComponent(episode)}`,d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},8000);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||"").trim(),ep=Number(m.mal_episode||0);if(!mal||!ep)return null;const out={malId:mal,malEpisode:ep,title:String(m.anime_title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],seasonTitle:String(m.season_title||"").trim(),imdbId:String(m.imdb_id||"").trim()};log(`Fallback result MAL=${mal} E${ep} title=${out.title||"?"}`);return out}
-function triggerPopulation(tmdbId,season,episode,m){const seed={tmdb_id:String(tmdbId),imdb_id:m.imdbId||null,mal_id:m.malId||null,title:m.title||null,season:Number(season),episode:Number(episode),mal_episode:Number(m.malEpisode)};log(`START BACKGROUND POPULATION TMDB=${tmdbId} S${season}E${episode} MAL=${m.malId} E${m.malEpisode}`);void json(POPULATE_URL,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json","User-Agent":UA},body:JSON.stringify(seed)},5000).then(()=>log(`Population trigger sent TMDB=${tmdbId}`)).catch(e=>log(`Population trigger failed: ${e.message}`))}
-function parseCards(html){const cards=[],m=html.match(/items:\s*JSON\.parse$begin:math:text$\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/s);if(m){const parsed=decodeJSON(m[1]);if(Array.isArray(parsed))for(const item of parsed){if(!item||!item.slug)continue;const titles=new Set();if(item.main_title)titles.add(item.main_title);if(item.title_list&&typeof item.title_list==="object")Object.values(item.title_list).forEach(t=>t&&titles.add(t));cards.push({slug:String(item.slug),url:item.url||`/anime/${item.slug}`,titles:[...titles]})}}if(cards.length)return cards;const root=parseHTML(html);for(const el of all(root,"div")){const x=attr(el,"x-data"),href=first(el,'a');if(!x||!href||!attr(href,"href").includes("/anime/"))continue;const jm=x.match(/JSON\.parse$begin:math:text$\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$/s),titles=new Set();if(jm){const p=decodeJSON(jm[1]);if(p&&typeof p==="object")Object.values(p).forEach(t=>t&&titles.add(t))}const parts=attr(href,"href").split("/"),slug=parts[parts.length-1]||parts[parts.length-2];if(slug)cards.push({slug,titles:[...titles]})}return cards}
-function getSeasonRegexes(season){if(season===1)return{mustNot:[/season\s*[2-9]/i,/saison\s*[2-9]/i,/[\s\-][iI]{2,}/,/\s+[2-9]nd/i,/\s+[2-9]rd/i,/\s+[2-9]th/i,/\s+ii\b/i,/\s+iii\b/i,/\s+iv\b/i,/\s+v\b/i,/movie/i,/gekijouban/i,/the movie/i]};const patterns=[];if(season===2)patterns.push(/season\s*2/i,/saison\s*2/i,/2nd\s*season/i,/[\s\-]ii\b/i,/\b2\b/);else if(season===3)patterns.push(/season\s*3/i,/saison\s*3/i,/3rd\s*season/i,/[\s\-]iii\b/i,/\b3\b/);else if(season===4)patterns.push(/season\s*4/i,/saison\s*4/i,/4th\s*season/i,/[\s\-]iv\b/i,/\b4\b/,/final\s*season/i);else patterns.push(new RegExp(`(?:season|saison)\\s*${season}`,"i"),new RegExp(`\\b${season}\\b`));return{must:patterns}}
-function matchCard(cards,targetTitles,baseTitle,season=1,seasonName=""){const normalizedTargets=targetTitles.map(normalize).filter(Boolean),normalizedBase=normalize(baseTitle),normalizedSeasonName=normalize(seasonName);if(normalizedSeasonName&&normalizedSeasonName!=="season"+season)for(const card of cards)for(const title of card.titles)if(normalize(title).includes(normalizedSeasonName))return card.slug;for(const target of normalizedTargets)for(const card of cards)for(const title of card.titles)if(normalize(title)===target)return card.slug;const rules=getSeasonRegexes(season);for(const card of cards){let matchesBase=false;for(const title of card.titles){const norm=normalize(title);if(norm.includes(normalizedBase)||normalizedBase.includes(norm)){matchesBase=true;break}}if(!matchesBase)continue;let seasonMatches=false;if(season===1)seasonMatches=!card.titles.some(title=>rules.mustNot.some(regex=>regex.test(title)));else seasonMatches=card.titles.some(title=>rules.must.some(regex=>regex.test(title)));if(seasonMatches)return card.slug}return cards[0]?cards[0].slug:null}
-function matchMovieCard(cards,targetTitles){const nt=targetTitles.map(normalize).filter(Boolean);for(const c of cards)for(const t of c.titles)if(nt.some(x=>x===normalize(t)))return c.slug;for(const c of cards)for(const t of c.titles){const n=normalize(t);if(nt.some(x=>n.includes(x)||x.includes(n)))return c.slug}return cards[0]?cards[0].slug:null}
-function parseVidstackFromHtml(html){const root=parseHTML(html),m=html.match(/vidstackPlayer$begin:math:text$JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$\)/);if(m){const d=decodeJSON(m[1]);if(d&&d.src)return{masterUrl:clean(d.src),subtitles:(d.subtitles||[]).map(s=>({url:clean(s.file),name:s.title||s.language||"English",language:s.language||"en"})).filter(s=>s.url)}}let master=attr(first(root,"media-player"),"src");if(!master){const x=html.match(/https:\/\/[^"']+\/master\.m3u8/);if(x)master=x[0]}const subtitles=[];for(const t of all(root,"track")){const src=attr(t,"src"),kind=attr(t,"kind");if(src&&(kind==="subtitles"||kind==="captions"||/\.(ass|vtt)(?:$|\?)/i.test(src)))subtitles.push({url:src,name:attr(t,"label")||"English",language:attr(t,"srclang")||"en"})}return{masterUrl:master||null,subtitles}}
-function audioFormat(t){const x=String(t||"").toLowerCase(),j=x.includes("japanese")||x.includes("jpn")||x.includes(" ja"),e=x.includes("english")||x.includes("eng")||x.includes(" en");return e&&j?"Dual Audio":e?"Dub":j?"Sub":x.includes("multi")?"Multi-Audio":"Sub"}
-async function episodePage(url){const r=await req(url,{headers:HEADERS},10000);if(!r.ok)return null;let cookies="";try{if(typeof r.headers.getSetCookie==="function")cookies=r.headers.getSetCookie().map(x=>x.split(";")[0]).join("; ");else cookies=r.headers.get("set-cookie")||""}catch(e){}return{text:await r.text(),cookies}}
-async function getTmdbInfo(tmdbId,mediaType,season=1){try{const u=`https://api.themoviedb.org/3/${mediaType==="tv"?"tv":"movie"}/${encodeURIComponent(tmdbId)}?api_key=68e094699525b18a70bab2f86b1fa706`,d=await json(u,{headers:{"User-Agent":UA}},6000);if(!d)return null;const info={title:d.name||d.title||d.original_name||d.original_title||"",originalTitle:d.original_name||d.original_title||"",seasonName:""};if(mediaType==="tv"&&season){const sd=await json(`https://api.themoviedb.org/3/tv/${encodeURIComponent(tmdbId)}/season/${encodeURIComponent(season)}?api_key=68e094699525b18a70bab2f86b1fa706`,{headers:{"User-Agent":UA}},6000);if(sd)info.seasonName=sd.name||""}return info}catch(e){return null}}
-async function resolveStream(tmdbId,mediaType="tv",season=1,episode=1){let m=null,fromDb=false;if(mediaType==="tv"){m=await dbMapping(tmdbId,season,episode);fromDb=!!m;if(!m)m=await fallbackMapping(tmdbId,season,episode);if(!m){log(`No mapping for TMDB=${tmdbId} S${season}E${episode}`);return[]}if(!m.title&&m.titles.length)m.title=m.titles[0];if(!m.title){const ti=await getTmdbInfo(tmdbId,"tv",season);if(ti)m.title=ti.title||""}if(!m.title)return[];if(!fromDb)triggerPopulation(tmdbId,season,episode,m)}else{const ti=await getTmdbInfo(tmdbId,"movie");if(!ti||!ti.title){log(`Movie metadata missing TMDB=${tmdbId}`);return[]}m={malEpisode:1,title:ti.title,titles:ti.originalTitle?[ti.originalTitle]:[],seasonTitle:""}}
-const queries=uniq([m.title,...m.titles]),base=(m.title||queries[0]||"").split(":")[0].replace(/season.*|\d+nd season|\d+rd season|\d+th season|saison.*/gi,"").trim(),specificTitles=season===1||mediaType==="movie"?uniq([...(m.titles||[]),m.title]):uniq(m.titles||[]);let cards=[];for(const q of uniq([base,...queries])){log(`AniZone search query="${q}"`);cards=await searchCards(q);log(`AniZone search results=${cards.length}`);if(cards.length)break}if(!cards.length){log("No AniZone search results");return[]}const slug=mediaType==="tv"?matchCard(cards,specificTitles,base,season,m.seasonTitle):matchMovieCard(cards,specificTitles);if(!slug){log("No matching AniZone slug");return[]}log(`Selected AniZone slug="${slug}" ${mediaType==="tv"?`S${season}E${m.malEpisode}`:"movie"}`);const episodeUrl=`${BASE}/anime/${slug}/${m.malEpisode}`,page=await episodePage(episodeUrl);if(!page){log(`Failed episode page ${episodeUrl}`);return[]}const root=parseHTML(page.text),streams=[],def=parseVidstackFromHtml(page.text),buttons=all(root,"button").filter(b=>String(attr(b,"wire:click")).includes("setVideo"));let format="Sub",server="AniZone";if(buttons.length){const bt=nodeText(buttons[0]);format=audioFormat(bt);const nm=bt.match(/^([A-Za-z0-9_-]+)/);if(nm)server=nm[1]}if(def.masterUrl){streams.push({name:"AniZone",title:`${m.title} - Episode ${m.malEpisode} [${server} - ${format}]`,url:def.masterUrl,quality:"Multi",headers:HEADERS,subtitles:def.subtitles});log(`Default stream extracted subtitles=${def.subtitles.length}`)}if(buttons.length>1){const csrfNode=all(root,"script").find(x=>attr(x,"data-csrf")),csrf=csrfNode&&attr(csrfNode,"data-csrf"),snap=all(root,"main").flatMap(x=>[...all(x,"div"),...all(x,"ul")]).find(x=>attr(x,"wire:snapshot")),snapshot=snap&&attr(snap,"wire:snapshot");if(csrf&&snapshot&&page.cookies){for(let i=1;i<buttons.length;i++){const btn=buttons[i],vm=String(attr(btn,"wire:click")).match(/setVideo$begin:math:text$\(\\d\+\)$end:math:text$/);if(!vm)continue;const bt=nodeText(btn),fmt=audioFormat(bt),nm=bt.match(/^([A-Za-z0-9_-]+)/),sn=nm?nm[1]:`Server ${i+1}`;try{const payload={_token:csrf,components:[{snapshot,updates:{},calls:[{path:"",method:"setVideo",params:[Number(vm[1])]}]}]};const r=await req(`${BASE}/livewire/update`,{method:"POST",headers:{Accept:"*/*","Content-Type":"application/json","X-Livewire":"","X-CSRF-TOKEN":csrf,Origin:BASE,Referer:episodeUrl,Cookie:page.cookies},body:JSON.stringify(payload)},8000);if(!r.ok)continue;const d=await r.json(),h=d&&d.components&&d.components[0]&&d.components[0].effects&&d.components[0].effects.html;if(!h)continue;const extra=parseVidstackFromHtml(h);if(extra.masterUrl&&extra.masterUrl!==def.masterUrl){streams.push({name:"AniZone",title:`${m.title} - Episode ${m.malEpisode} [${sn} - ${fmt}]`,url:extra.masterUrl,quality:"Multi",headers:HEADERS,subtitles:extra.subtitles.length?extra.subtitles:def.subtitles});log(`Server ${sn} extracted`)}}catch(e){log(`Server ${sn} failed: ${e.message}`)}}}}log(`Final stream count=${streams.length}`);return streams}
-async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{const id=String(tmdbId||"").trim(),type=String(mediaType||"tv").toLowerCase(),s=Number(season),e=Number(episode);log(`REQUEST TMDB=${id} type=${type} S${s}E${e}`);if(!id||(type!=="tv"&&type!=="movie")||!Number.isInteger(s)||s<0||!Number.isInteger(e)||e<1)return[];return await resolveStream(id,type,s,e)}catch(e){log("Fatal: "+e.message);return[]}}
+
+async function req(url,opt={},timeout=TIMEOUT){
+  const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);
+  try{
+    return await fetch(url,{...opt,signal:c.signal,headers:{...HEADERS,...(opt.headers||{})}});
+  }catch(e){
+    return null;
+  }finally{
+    clearTimeout(t);
+  }
+}
+
+async function text(url,opt={},timeout=TIMEOUT){
+  const r=await req(url,opt,timeout);
+  if(!r||!r.ok)return"";
+  try{return await r.text()}catch(e){return""}
+}
+
+async function json(url,opt={},timeout=TIMEOUT){
+  const r=await req(url,opt,timeout);
+  if(!r||!r.ok)return null;
+  try{return await r.json()}catch(e){return null}
+}
+
+function attrs(s){
+  const o={};
+  String(s||"").replace(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g,(m,k,a,b,c)=>{o[k]=a!=null?a:b!=null?b:c!=null?c:"";return m});
+  return o;
+}
+
+function parseHTML(html){
+  const root={type:"root",children:[]},stack=[root],src=String(html||"");
+  const re=/<\/?([a-zA-Z0-9:-]+)([^>]*)>/g;
+  let last=0,m;
+  while((m=re.exec(src))){
+    if(m.index>last){
+      const tx=src.slice(last,m.index);
+      if(tx)stack[stack.length-1].children.push({type:"text",text:tx});
+    }
+    const full=m[0],name=m[1].toLowerCase();
+    if(full[1]==="/"){
+      for(let i=stack.length-1;i>0;i--){
+        if(stack[i].name===name){
+          stack.length=i;
+          break;
+        }
+      }
+    }else if(full[1]!=="!"){
+      const n={type:"element",name,attrs:attrs(m[2]),children:[]};
+      stack[stack.length-1].children.push(n);
+      if(!/\/>$/.test(full)&&!["area","base","br","col","embed","hr","img","input","link","meta","param","source","track","wbr"].includes(name))stack.push(n);
+    }
+    last=re.lastIndex;
+  }
+  if(last<src.length)stack[stack.length-1].children.push({type:"text",text:src.slice(last)});
+  return root;
+}
+
+function children(n){return n&&n.children||[]}
+
+function match(n,sel){
+  if(!n||n.type!=="element")return false;
+  if(sel.startsWith("#"))return n.attrs.id===sel.slice(1);
+  if(sel.startsWith("."))return String(n.attrs.class||"").split(/\s+/).includes(sel.slice(1));
+  if(sel.startsWith("[")){
+    const m=sel.match(/^\[([^\]=~*^$]+)(?:([~*^$]?=)["']?([^"'\]]+)["']?)?\]$/);
+    if(!m)return false;
+    const v=n.attrs[m[1]];
+    if(v==null)return false;
+    if(!m[2])return true;
+    if(m[2]==="=")return v===m[3];
+    if(m[2]==="*=")return v.includes(m[3]);
+    if(m[2]==="~=")return v.split(/\s+/).includes(m[3]);
+    if(m[2]==="^=")return v.startsWith(m[3]);
+    if(m[2]==="$=")return v.endsWith(m[3]);
+  }
+  return n.name===sel.toLowerCase();
+}
+
+function all(root,sel){
+  const out=[];
+  function walk(n){
+    if(n&&n.type==="element"&&match(n,sel))out.push(n);
+    for(const c of children(n))walk(c);
+  }
+  walk(root);
+  return out;
+}
+
+function first(root,sel){return all(root,sel)[0]||null}
+
+function nodeText(n){
+  if(!n)return"";
+  if(n.type==="text")return n.text||"";
+  return children(n).map(nodeText).join("");
+}
+
+function attr(n,k){return n&&n.attrs?n.attrs[k]:undefined}
+
+function sanitizeJson(s){
+  return String(s||"")
+    .replace(/\\u0022/g,'"')
+    .replace(/\\u0026/g,"&")
+    .replace(/\\'/g,"'")
+    .replace(/\\\//g,"/")
+    .replace(/\\\\/g,"\\")
+    .replace(/\\&/g,"&")
+    .replace(/\\0/g,"\\u0000")
+    .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>"\\u00"+h)
+    .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g,"");
+}
+
+function decodeJSON(s){
+  try{return JSON.parse(sanitizeJson(s))}
+  catch(e){return null}
+}
+
+function extractJSONParse(s){
+  const m=/JSON\.parse\('((?:[^'\\]|\\.)*)'\)/s.exec(String(s||""));
+  return m?decodeJSON(m[1]):null;
+}
+
+function parseCards(html){
+  const cards=[],src=String(html||"");
+  const m=src.match(/items:\s*JSON\.parse\('((?:[^'\\]|\\.)*)'\)/s);
+  if(m){
+    const d=decodeJSON(m[1]);
+    if(Array.isArray(d)){
+      for(const x of d){
+        if(x&&typeof x==="object")cards.push(x);
+      }
+    }
+  }
+  if(cards.length)return cards;
+  const root=parseHTML(src);
+  for(const n of all(root,"a")){
+    const x=attr(n,"x-data")||"";
+    if(x.includes("anmTitles")){
+      cards.push({
+        slug:(attr(n,"href")||"").replace(/^\/anime\//,"").replace(/\/$/,""),
+        title:nodeText(n).trim()
+      });
+    }
+  }
+  return cards;
+}
+
+function cardSlug(c){
+  if(!c)return"";
+  return String(c.slug||c.url||c.href||c.link||"").replace(/^https?:\/\/[^/]+/,"").replace(/^\/anime\//,"").replace(/^\/+/,"").replace(/\/+$/,"");
+}
+
+function cardTitle(c){
+  if(!c)return"";
+  return String(c.title||c.name||c.anime_title||c.animeTitle||c.en||c.romaji||"").trim();
+}
+
+function normalizeTitle(s){
+  return String(s||"").toLowerCase().replace(/&amp;/g,"&").replace(/[’'`]/g,"").replace(/[^a-z0-9]+/g," ").replace(/\s+/g," ").trim();
+}
+
+function titleWords(s){
+  return normalizeTitle(s).split(" ").filter(Boolean);
+}
+
+function titleScore(a,b){
+  const aa=normalizeTitle(a),bb=normalizeTitle(b);
+  if(!aa||!bb)return 0;
+  if(aa===bb)return 100;
+  if(aa.includes(bb)||bb.includes(aa))return 80;
+  const aw=titleWords(aa),bw=titleWords(bb);
+  let hits=0;
+  for(const w of aw)if(w.length>1&&bw.includes(w))hits++;
+  return Math.round((hits/Math.max(aw.length,bw.length))*70);
+}
+
+function seasonPatterns(season){
+  const s=Number(season)||1;
+  if(s<=1)return[];
+  return[
+    new RegExp("\\bseason\\s*"+s+"\\b","i"),
+    new RegExp("\\b"+s+"(?:st|nd|rd|th)\\s+season\\b","i"),
+    new RegExp("\\bs"+s+"\\b","i"),
+    new RegExp("\\bpart\\s*"+s+"\\b","i"),
+    new RegExp("\\b"+s+"\\b","i")
+  ];
+}
+
+function matchCard(cards,title,season){
+  if(!cards||!cards.length)return null;
+  const s=Number(season)||1;
+  let best=null,bestScore=-1;
+  for(const c of cards){
+    const ct=cardTitle(c);
+    if(!ct)continue;
+    let score=titleScore(title,ct);
+    if(s>1){
+      const pats=seasonPatterns(s);
+      let hasSeason=false;
+      for(const p of pats)if(p.test(ct)){hasSeason=true;break}
+      if(hasSeason)score+=35;
+      else score-=15;
+    }
+    if(score>bestScore){
+      bestScore=score;
+      best=c;
+    }
+  }
+  return bestScore>=35?best:null;
+}
+
+function matchMovieCard(cards,title){
+  if(!cards||!cards.length)return null;
+  let best=null,bestScore=-1;
+  for(const c of cards){
+    const score=titleScore(title,cardTitle(c));
+    if(score>bestScore){
+      bestScore=score;
+      best=c;
+    }
+  }
+  return bestScore>=35?best:null;
+}
+
+async function searchCards(query){
+  if(!query)return[];
+  const url=BASE+"/anime?search="+encodeURIComponent(query)+"&sort=title-asc";
+  const h=await text(url,{headers:HEADERS},10000);
+  if(!h)return[];
+  return parseCards(h);
+}
+
+function parseVidstackFromHtml(html){
+  const root=parseHTML(html),out=[];
+  const m=String(html||"").match(/vidstackPlayer$begin:math:text$JSON\\\.parse\\\(\'\(\(\?\:\[\^\'\\\\\]\|\\\\\.\)\*\)\'$end:math:text$\)/);
+  if(m){
+    const d=decodeJSON(m[1]);
+    if(d){
+      if(Array.isArray(d))out.push(...d);
+      else if(d.sources&&Array.isArray(d.sources))out.push(...d.sources);
+      else if(d.source)out.push(d.source);
+      else out.push(d);
+    }
+  }
+  for(const p of all(root,"media-player")){
+    const src=attr(p,"src");
+    if(src)out.push({src,type:attr(p,"type")||"application/x-mpegURL"});
+  }
+  const ms=String(html||"").match(/https?:\/\/[^"'\\\s]+\.m3u8[^"'\\\s]*/g)||[];
+  for(const u of ms)out.push({src:u,type:"application/x-mpegURL"});
+  const tracks=[];
+  for(const t of all(root,"track")){
+    const u=attr(t,"src");
+    if(u)tracks.push({
+      url:u,
+      lang:attr(t,"srclang")||attr(t,"label")||""
+    });
+  }
+  return{sources:out,subtitles:tracks};
+}
+
+function normalizeStream(x){
+  if(!x)return null;
+  if(typeof x==="string"){
+    if(!/^https?:\/\//i.test(x))return null;
+    return{url:x};
+  }
+  const u=x.url||x.src||x.file||x.href;
+  if(!u||!/^https?:\/\//i.test(String(u)))return null;
+  return{
+    url:String(u),
+    type:x.type||"application/x-mpegURL",
+    quality:x.quality||x.label||""
+  };
+}
+
+function audioFormat(s){
+  const x=String(s||"").toLowerCase();
+  if(x.includes("multi"))return"Multi";
+  if(x.includes("dub")||x.includes("english"))return"English";
+  return"Japanese";
+}
+
+async function episodePage(slug,ep){
+  const url=BASE+"/anime/"+slug+"/"+ep;
+  const r=await req(url,{headers:HEADERS},TIMEOUT);
+  if(!r||!r.ok)return null;
+  let html="";
+  try{html=await r.text()}catch(e){return null}
+  const cookies=[];
+  const sc=r.headers&&r.headers.get?r.headers.get("set-cookie"):"";
+  if(sc)cookies.push(sc);
+  return{html,cookie:cookies.join("; ")};
+}
+
+async function getTmdbInfo(tmdbId,mediaType){
+  const key=""; 
+  const url=mediaType==="movie"
+    ? "https://api.themoviedb.org/3/movie/"+encodeURIComponent(tmdbId)+"?language=en-US"
+    : "https://api.themoviedb.org/3/tv/"+encodeURIComponent(tmdbId)+"?language=en-US";
+  const r=await req(url,{headers:{"Accept":"application/json"}},10000);
+  if(!r||!r.ok)return null;
+  try{return await r.json()}catch(e){return null}
+}
+
+async function dbMapping(tmdbId,season,episode){
+  console.log("[AniZone Lazy] DB lookup",{
+    tmdb_id:String(tmdbId),
+    season:Number(season),
+    episode:Number(episode)
+  });
+  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode);
+  const d=await json(u,{headers:{"Accept":"application/json"}},10000);
+  if(d&&d.ok&&d.mapping){
+    console.log("[AniZone Lazy] DB HIT",d.mapping);
+    return{mapping:d.mapping,fromDb:true};
+  }
+  console.log("[AniZone Lazy] DB MISS");
+  return null;
+}
+
+async function fallbackMapping(tmdbId,season,episode){
+  console.log("[AniZone Lazy] FALLBACK MAPPING",{
+    tmdb_id:String(tmdbId),
+    season:Number(season),
+    episode:Number(episode)
+  });
+  const u=MAPPING_URL+"?resolve=1&tmdb_id="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode);
+  const d=await json(u,{headers:{"Accept":"application/json"}},20000);
+  if(d&&d.ok&&d.mapping){
+    console.log("[AniZone Lazy] FALLBACK MAPPING HIT",d.mapping);
+    return{mapping:d.mapping,fromDb:false};
+  }
+  console.log("[AniZone Lazy] FALLBACK MAPPING FAILED",d);
+  return null;
+}
+
+function triggerPopulation(seed){
+  if(!seed||!seed.tmdb_id)return;
+  console.log("[AniZone Lazy] START BACKGROUND POPULATION",seed);
+  try{
+    void fetch(POPULATE_URL,{
+      method:"POST",
+      headers:{
+        ...HEADERS,
+        "Content-Type":"application/json",
+        "Accept":"application/json"
+      },
+      body:JSON.stringify(seed)
+    }).then(r=>{
+      console.log("[AniZone Lazy] BACKGROUND POPULATION REQUEST",r&&r.status);
+      return r;
+    }).catch(e=>{
+      console.log("[AniZone Lazy] BACKGROUND POPULATION REQUEST FAILED",String(e));
+    });
+  }catch(e){
+    console.log("[AniZone Lazy] BACKGROUND POPULATION LAUNCH FAILED",String(e));
+  }
+}
+
+function mappingTitle(mapping){
+  return String(
+    mapping&&(
+      mapping.anime_title||
+      mapping.title||
+      mapping.name||
+      mapping.mal_title||
+      ""
+    )
+  ).trim();
+}
+
+function mappingEpisode(mapping,requestedEpisode){
+  const v=mapping&&(
+    mapping.mal_episode!=null?mapping.mal_episode:
+    mapping.episode!=null?mapping.episode:
+    mapping.malEpisode
+  );
+  const n=Number(v);
+  return Number.isFinite(n)&&n>0?n:Number(requestedEpisode)||1;
+}
+
+function mappingMalId(mapping){
+  const v=mapping&&(
+    mapping.mal_id!=null?mapping.mal_id:
+    mapping.malId!=null?mapping.malId:
+    mapping.id
+  );
+  return v==null?"":String(v);
+}
+
+function mappingImdb(mapping){
+  return String(mapping&&(mapping.imdb_id||mapping.imdbId||mapping.imdb)||"");
+}
+
+function mappingTmdb(mapping,tmdbId){
+  return String(mapping&&(mapping.tmdb_id||mapping.tmdbId)||tmdbId||"");
+}
+
+async function resolveStream(tmdbId,mediaType,season,episode){
+  const isMovie=mediaType==="movie";
+  let mappingResult=null;
+  let title="";
+  let malEpisode=1;
+  let malId="";
+  let imdbId="";
+
+  if(!isMovie){
+    mappingResult=await dbMapping(tmdbId,season,episode);
+    if(!mappingResult)mappingResult=await fallbackMapping(tmdbId,season,episode);
+    if(!mappingResult||!mappingResult.mapping){
+      console.log("[AniZone Lazy] No mapping available");
+      return[];
+    }
+
+    const mapping=mappingResult.mapping;
+    title=mappingTitle(mapping);
+    malEpisode=mappingEpisode(mapping,episode);
+    malId=mappingMalId(mapping);
+    imdbId=mappingImdb(mapping);
+
+    if(!mappingResult.fromDb){
+      triggerPopulation({
+        tmdb_id:mappingTmdb(mapping,tmdbId),
+        imdb_id:imdbId,
+        mal_id:malId,
+        title:title,
+        season:Number(season)||1,
+        episode:Number(episode)||1,
+        mal_episode:malEpisode
+      });
+    }
+  }else{
+    const info=await getTmdbInfo(tmdbId,"movie");
+    if(!info)return[];
+    title=String(info.title||info.original_title||"").trim();
+    imdbId=String(info.imdb_id||"");
+    if(!title)return[];
+  }
+
+  if(!title)return[];
+
+  console.log("[AniZone Lazy] SEARCH",{
+    title,
+    season:Number(season)||1,
+    episode:Number(episode)||1,
+    mal_episode:malEpisode
+  });
+
+  let cards=await searchCards(title);
+
+  if(!cards.length){
+    const info=await getTmdbInfo(tmdbId,mediaType);
+    if(info){
+      const alt=[
+        info.name,
+        info.original_name,
+        info.title,
+        info.original_title
+      ].filter(Boolean);
+      for(const q of alt){
+        if(normalizeTitle(q)===normalizeTitle(title))continue;
+        cards=await searchCards(q);
+        if(cards.length)break;
+      }
+    }
+  }
+
+  if(!cards.length){
+    console.log("[AniZone Lazy] SEARCH EMPTY",title);
+    return[];
+  }
+
+  const card=isMovie
+    ? matchMovieCard(cards,title)
+    : matchCard(cards,title,season);
+
+  if(!card){
+    console.log("[AniZone Lazy] CARD NOT FOUND",{
+      title,
+      season:Number(season)||1,
+      results:cards.length
+    });
+    return[];
+  }
+
+  const slug=cardSlug(card);
+  if(!slug){
+    console.log("[AniZone Lazy] CARD HAS NO SLUG",card);
+    return[];
+  }
+
+  console.log("[AniZone Lazy] CARD MATCH",{
+    title:cardTitle(card),
+    slug,
+    mal_episode:malEpisode
+  });
+
+  const page=await episodePage(slug,malEpisode);
+  if(!page){
+    console.log("[AniZone Lazy] EPISODE PAGE FAILED",{
+      slug,
+      episode:malEpisode
+    });
+    return[];
+  }
+
+  const parsed=parseVidstackFromHtml(page.html);
+  const streams=[];
+  const seen=new Set();
+
+  for(const s of parsed.sources||[]){
+    const n=normalizeStream(s);
+    if(!n||seen.has(n.url))continue;
+    seen.add(n.url);
+    streams.push({
+      ...n,
+      title:"AniZone",
+      name:"AniZone",
+      behaviorHints:{
+        ...(n.behaviorHints||{}),
+        bingeGroup:"anizone"
+      },
+      subtitles:parsed.subtitles||[],
+      audio:audioFormat(n.label||n.quality||"")
+    });
+  }
+
+  const root=parseHTML(page.html);
+  const buttons=all(root,"button");
+
+  for(let i=0;i<buttons.length;i++){
+    const btn=buttons[i];
+    const vm=String(attr(btn,"wire:click")||"").match(/setVideo$begin:math:text$\(\\d\+\)$end:math:text$/);
+    if(!vm)continue;
+
+    const videoId=vm[1];
+    try{
+      const csrf=String(
+        attr(first(root,'meta[name="csrf-token"]'),"content")||""
+      );
+      const snapshot=attr(first(root,"[wire\\:snapshot]"),"wire:snapshot")||"";
+      const componentId=attr(first(root,"[wire\\:id]"),"wire:id")||"";
+
+      const body={
+        components:[{
+          snapshot:snapshot,
+          updates:[],
+          calls:[{
+            path:"",
+            method:"setVideo",
+            params:[Number(videoId)]
+          }]
+        }]
+      };
+
+      const extraHeaders={
+        ...HEADERS,
+        "Content-Type":"application/json",
+        "X-Livewire":"true",
+        "X-Requested-With":"XMLHttpRequest"
+      };
+
+      if(csrf)extraHeaders["X-CSRF-TOKEN"]=csrf;
+      if(page.cookie)extraHeaders.Cookie=page.cookie;
+
+      if(componentId)extraHeaders["X-Livewire-Id"]=componentId;
+
+      const r=await req(BASE+"/livewire/update",{
+        method:"POST",
+        headers:extraHeaders,
+        body:JSON.stringify(body)
+      },10000);
+
+      if(!r||!r.ok)continue;
+
+      let h="";
+      try{h=await r.text()}catch(e){continue}
+
+      const p=parseVidstackFromHtml(h);
+
+      for(const s of p.sources||[]){
+        const n=normalizeStream(s);
+        if(!n||seen.has(n.url))continue;
+        seen.add(n.url);
+        streams.push({
+          ...n,
+          title:"AniZone",
+          name:"AniZone",
+          behaviorHints:{
+            ...(n.behaviorHints||{}),
+            bingeGroup:"anizone"
+          },
+          subtitles:p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles||[],
+          audio:audioFormat(n.label||n.quality||"")
+        });
+      }
+    }catch(e){
+      console.log("[AniZone Lazy] LIVEWIRE SERVER FAILED",videoId,String(e));
+    }
+  }
+
+  console.log("[AniZone Lazy] STREAMS FOUND",{
+    title,
+    slug,
+    episode:malEpisode,
+    count:streams.length
+  });
+
+  return streams;
+}
+
+async function getStreams(tmdbId,mediaType,season,episode,settings){
+  console.log("[AniZone Lazy] REQUEST",{
+    tmdbId,
+    mediaType,
+    season,
+    episode
+  });
+
+  try{
+    return await resolveStream(
+      String(tmdbId),
+      String(mediaType||"tv"),
+      Number(season)||1,
+      Number(episode)||1
+    );
+  }catch(e){
+    console.log("[AniZone Lazy] ERROR",String(e));
+    return[];
+  }
+}
+
 module.exports={getStreams};
