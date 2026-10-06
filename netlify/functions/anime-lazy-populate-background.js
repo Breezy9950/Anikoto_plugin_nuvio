@@ -20,8 +20,13 @@ result=await Promise.race([populateIfNeeded(Object.assign({},seed,{tmdb_id:id,se
 }finally{
 if(timer!==null)clearTimeout(timer);
 }
-log(`COMPLETE TMDB=${id} S${season}E${episode} ok=${!!(result&&result.ok)} skipped=${!!(result&&result.skipped)} locked=${!!(result&&result.locked)} boundary=${!!(result&&result.boundary)} exhausted=${!!(result&&result.exhausted)}`);
-return{statusCode:200,body:JSON.stringify({ok:true,result:{ok:!!(result&&result.ok),skipped:!!(result&&result.skipped),locked:!!(result&&result.locked),boundary:!!(result&&result.boundary),exhausted:!!(result&&result.exhausted),seasonState:result&&result.seasonState||null}})}
+const populationOk=!!(result&&(
+result.ok===true||
+(result.seasonState&&Number(result.mapped||0)>=0&&Number(result.failed||0)===0)||
+(result.existing===true)
+));
+log(`COMPLETE TMDB=${id} S${season}E${episode} ok=${populationOk} skipped=${!!(result&&result.skipped)} locked=${!!(result&&result.locked)} boundary=${!!(result&&result.boundary)} exhausted=${!!(result&&result.exhausted)} mapped=${Number(result&&result.mapped||0)} failed=${Number(result&&result.failed||0)}`);
+return{statusCode:200,body:JSON.stringify({ok:true,result:{ok:populationOk,skipped:!!(result&&result.skipped),locked:!!(result&&result.locked),boundary:!!(result&&result.boundary),exhausted:!!(result&&result.exhausted),mapped:Number(result&&result.mapped||0),failed:Number(result&&result.failed||0),seasonState:result&&result.seasonState||null}})}
 }catch(error){
 console.error("[ANIME LAZY BG] FAILED",error&&error.stack||error);
 const msg=error&&error.message?error.message:"Background population failed";
