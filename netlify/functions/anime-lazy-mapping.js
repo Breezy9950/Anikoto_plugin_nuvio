@@ -121,8 +121,8 @@ async function discoverNext(id,current){const series=await tmdb(id);const nums=A
 async function populate(seed){
 const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),parent=await readSeries(st,id),old=await readSeason(st,id,s),current=old&&old.episodes||{},mappedThrough=Number(old&&old.mappedThrough||0),need=current[String(e)]&&current[String(e)].mal_episode!=null?[]:[e];
 if(!need.length){log(`REQUESTED EPISODE ALREADY MAPPED TMDB=${id} S${s}E${e}`);return{ok:true,skipped:true,seasonState:old}}
-const start=e<=mappedThrough?e:Math.max(1,mappedThrough+1);
-const end=e<=mappedThrough?e:start+MAX_WINDOW-1;
+const start=Math.max(1,e);
+const end=start+MAX_WINDOW-1;
 log(`POPULATE REQUEST TMDB=${id} S${s}E${e} mappedThrough=${mappedThrough} range=${start}-${end}`);
 return populateWindow(id,s,start,end,seed,parent,old)
 }
