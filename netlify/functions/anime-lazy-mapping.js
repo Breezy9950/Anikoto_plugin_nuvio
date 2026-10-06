@@ -46,17 +46,138 @@ return{ok:false,temporary:!genuine,imdb,source:genuine?"NO_ANIME_SOURCE":"TEMPOR
 }
 async function readSeries(s,id){const x=await s.get(`anime:${id}`,{type:"json",consistency:"eventual"});return x&&typeof x==="object"?x:null}
 async function readSeason(s,id,n){const x=await s.get(`anime:${id}:season:${n}`,{type:"json",consistency:"eventual"});return x&&typeof x==="object"?x:null}
-function mapping(record,seasonNo,episode){const ss=record&&record.seasons&&record.seasons[String(seasonNo)],e=ss&&ss.episodes&&ss.episodes[String(episode)];if(!e||e.mal_episode==null)return null;return{tmdb_id:record.tmdb_id||null,imdb_id:record.imdb_id||null,tvdb_id:record.tvdb_id||e.tvdb_id||null,mal_id:e.mal_id||record.mal_id||null,anime_title:record.title||"",titles:record.titles||[],mal_title:e.mal_title||record.mal_title||null,mal_title_english:e.mal_title_english||record.mal_title_english||null,mal_title_romanji:e.mal_title_romanji||record.mal_title_romanji||null,season:Number(seasonNo),episode:Number(episode),tvdb_season:e.tvdb_season!=null?Number(e.tvdb_season):Number(seasonNo),tvdb_episode:e.tvdb_episode!=null?Number(e.tvdb_episode):Number(episode),tvdb_episode_id:e.tvdb_episode_id||null,tmdb_season:e.tmdb_season!=null?Number(e.tmdb_season):null,tmdb_episode:e.tmdb_episode!=null?Number(e.tmdb_episode):null,tmdb_episode_id:e.tmdb_episode_id||null,mal_episode:Number(e.mal_episode),air_date:e.air_date||"",episode_title:e.title||"",season_title:ss.title||"",source:"lazy-db"}}
-async function lookup(id,s,e){const st=db(),ss=await readSeason(st,id,s);if(ss&&ss.episodes&&ss.episodes[String(e)]&&ss.episodes[String(e)].mal_episode!=null){const p=await readSeries(st,id)||{tmdb_id:id};const m=mapping(Object.assign({},p,{seasons:{[String(s)]:ss}}),s,e);if(m){log(`DB HIT SEASON TMDB=${id} TVDB S${s}E${e}`);return m}}const legacy=await readSeries(st,id),m=mapping(legacy,s,e);log(m?`DB HIT LEGACY TMDB=${id} TVDB S${s}E${e}`:`DB MISS TMDB=${id} TVDB S${s}E${e}`);return m}
+function mapping(record,seasonNo,episode){const ss=record&&record.seasons&&record.seasons[String(seasonNo)],e=ss&&ss.episodes&&ss.episodes[String(episode)];if(!e||e.mal_episode==null)return null;return{tmdb_id:record.tmdb_id||null,imdb_id:record.imdb_id||null,tvdb_id:record.tvdb_id||e.tvdb_id||null,mal_id:e.mal_id||record.mal_id||null,anime_title:record.title||"",titles:record.titles||[],mal_title:e.mal_title||record.mal_title||null,mal_title_english:e.mal_title_english||record.mal_title_english||null,mal_title_romanji:e.mal_title_romanji||record.mal_title_romanji||null,season:Number(seasonNo),episode:Number(episode),tvdb_season:e.tvdb_season!=null?Number(e.tvdb_season):null,tvdb_episode:e.tvdb_episode!=null?Number(e.tvdb_episode):null,tvdb_episode_id:e.tvdb_episode_id||null,tmdb_season:e.tmdb_season!=null?Number(e.tmdb_season):null,tmdb_episode:e.tmdb_episode!=null?Number(e.tmdb_episode):null,tmdb_episode_id:e.tmdb_episode_id||null,mal_episode:Number(e.mal_episode),air_date:e.air_date||"",episode_title:e.title||"",season_title:ss.title||"",source:"lazy-db"}}
+async function lookup(id,s,e){const st=db(),ss=await readSeason(st,id,s);if(ss&&ss.episodes&&ss.episodes[String(e)]&&ss.episodes[String(e)].mal_episode!=null){const p=await readSeries(st,id)||{tmdb_id:id};const m=mapping(Object.assign({},p,{seasons:{[String(s)]:ss}}),s,e);if(m){log(`DB HIT SEASON TMDB=${id} S${s}E${e} TVDB S${m.tvdb_season}E${m.tvdb_episode}`);return m}}const legacy=await readSeries(st,id),m=mapping(legacy,s,e);log(m?`DB HIT LEGACY TMDB=${id} S${s}E${e} TVDB S${m.tvdb_season}E${m.tvdb_episode}`:`DB MISS TMDB=${id} S${s}E${e}`);return m}
 async function lock(st,id){const k=`building:${id}`,now=Date.now(),old=await st.get(k,{type:"json",consistency:"eventual"});if(old&&Number(old.expiresAt)>now){log(`LOCK COLLISION TMDB=${id}`);return false}if(old)try{await st.delete(k)}catch(e){}const r=await st.setJSON(k,{tmdb_id:id,startedAt:now,expiresAt:now+LOCK_TTL},{onlyIfNew:true});if(r&&r.modified){log(`LOCK ACQUIRED TMDB=${id}`);return true}log(`LOCK COLLISION TMDB=${id}`);return false}
 async function unlock(st,id){try{await st.delete(`building:${id}`);log(`LOCK RELEASED TMDB=${id}`)}catch(e){log(`LOCK RELEASE FAILED TMDB=${id}`)}}
 function through(total,episodes){let n=0;while(n<total&&episodes&&episodes[String(n+1)]&&episodes[String(n+1)].mal_episode!=null)n++;return n}
 async function shinkro(id,s,e){const r=await fetchJson(`${SHINKRO_URL}?tmdbId=${encodeURIComponent(id)}&season=${s}&episode=${e}`,7000);return r.state==="HIT"&&r.data&&r.data.ok&&r.data.mapping?r.data.mapping:null}
 function bestTvdbEpisode(list,s,e){return list.find(x=>x.tvdb_season===s&&x.tvdb_episode===e)||null}
 function bestTmdbEpisode(episodes,target){if(!target)return null;const exactDate=target.air_date?episodes.filter(x=>dateMatch(x.air_date,target.air_date)):[];if(exactDate.length===1)return exactDate[0];if(exactDate.length){const title=exactDate.find(x=>titleMatch(x.title,target.title));if(title)return title;return exactDate[0]}if(target.title){const title=episodes.find(x=>titleMatch(x.title,target.title));if(title)return title}return null}
+function bestTvdbByTmdbEpisode(list,target){
+if(!target||!list.length)return null;
+if(target.air_date){
+const dated=list.filter(x=>dateMatch(x.air_date,target.air_date));
+if(dated.length===1)return dated[0];
+if(dated.length>1&&target.title){const titled=dated.find(x=>titleMatch(x.title,target.title));if(titled)return titled}
+if(dated.length)return dated[0]
+}
+if(target.title){
+const titled=list.filter(x=>titleMatch(x.title,target.title));
+if(titled.length===1)return titled[0];
+if(titled.length>1){
+const exact=titled.find(x=>normTitle(x.title)===normTitle(target.title));
+if(exact)return exact;
+return titled[0]
+}
+}
+return null
+}
 async function allTmdbEpisodes(id,series){const seasons=(series&&series.seasons||[]).map(x=>Number(x.season_number)).filter(x=>Number.isInteger(x)&&x>=0);const rs=await Promise.all(seasons.map(n=>tmdbSeason(id,n)));const out=[];for(const r of rs)for(const x of r&&Array.isArray(r.episodes)?r.episodes:[])out.push({tmdb_season:Number(x.season_number),tmdb_episode:Number(x.episode_number),tmdb_episode_id:x.id||null,air_date:day(x.air_date),title:x.name||""});return out}
 async function resolveTmdbForTvdb(id,series,tvdbEpisode){if(!tvdbEpisode)return null;const eps=await allTmdbEpisodes(id,series);let match=bestTmdbEpisode(eps,tvdbEpisode);if(match){try{const ex=await tmdbEpisodeExternal(id,match.tmdb_season,match.tmdb_episode);if(ex&&ex.tvdb_id&&tvdbEpisode.tvdb_episode_id&&String(ex.tvdb_id)===String(tvdbEpisode.tvdb_episode_id))return Object.assign({},match,{verified:"tvdb_episode_id"})}catch(_){}return Object.assign({},match,{verified:"air_date_or_title"})}return null}
-async function resolveMalEpisode(malIds,tvdbEpisode,tmdbEpisode){const results=await Promise.all(malIds.slice(0,5).map(async mal=>{try{return{mal:String(mal),data:await aniMal(mal)}}catch(e){return{mal:String(mal),data:null}}}));for(const r of results){const eps=Object.values(r.data&&r.data.episodes||{}).map(x=>({episode:Number(x.episode),tvdb_episode_id:x.tvdbEid||x.tvdbId||null,absolute:x.absoluteEpisodeNumber!=null?Number(x.absoluteEpisodeNumber):null,air_date:day(x.airDateUtc||x.airDate||x.airdate),title:(x.title&&(x.title.en||x.title["x-jat"]||x.title.x))||""})).filter(x=>Number.isInteger(x.episode)&&x.episode>0);if(tvdbEpisode&&tvdbEpisode.tvdb_episode_id){const x=eps.find(e=>e.tvdb_episode_id&&String(e.tvdb_episode_id)===String(tvdbEpisode.tvdb_episode_id));if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"tvdb_episode_id",title:x.title}}if(tvdbEpisode&&tvdbEpisode.absolute!=null&&tvdbEpisode.absolute>0){const x=eps.find(e=>e.absolute!=null&&Number(e.absolute)===Number(tvdbEpisode.absolute));if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"absolute",title:x.title}}if(tvdbEpisode&&tvdbEpisode.air_date){const xs=eps.filter(e=>dateMatch(e.air_date,tvdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);if(xs.length){const x=xs.find(e=>titleMatch(e.title,tvdbEpisode.title))||xs[0];return{mal_id:r.mal,mal_episode:x.episode,match:"air_date",title:x.title}}}if(tvdbEpisode&&tvdbEpisode.title){const x=eps.find(e=>titleMatch(e.title,tvdbEpisode.title));if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"title",title:x.title}}if(tmdbEpisode&&tmdbEpisode.air_date){const xs=eps.filter(e=>dateMatch(e.air_date,tmdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);if(xs.length)return{mal_id:r.mal,mal_episode:xs[0].episode,match:"tmdb_air_date",title:xs[0].title}}}return null}
+async function resolveTvdbEpisode(id,s,e,tvdbEpisodes,tmdbEpisodes){
+const tmdbEpisode=tmdbEpisodes.find(x=>x.tmdb_season===s&&x.tmdb_episode===e)||null;
+if(!tmdbEpisode)return{tvdb:null,tmdb:null,match:"none"};
+const direct=bestTvdbEpisode(tvdbEpisodes,s,e);
+if(direct){
+try{
+const ex=await tmdbEpisodeExternal(id,s,e);
+if(ex&&ex.tvdb_id&&direct.tvdb_episode_id&&String(ex.tvdb_id)===String(direct.tvdb_episode_id))return{tvdb:direct,tmdb:tmdbEpisode,match:"tmdb_tvdb_episode_id"};
+}catch(_){}
+if((direct.air_date&&tmdbEpisode.air_date&&dateMatch(direct.air_date,tmdbEpisode.air_date))||(direct.title&&titleMatch(direct.title,tmdbEpisode.title)))return{tvdb:direct,tmdb:tmdbEpisode,match:"tvdb_s_e_verified"};
+}
+const inferred=bestTvdbByTmdbEpisode(tvdbEpisodes,tmdbEpisode);
+if(inferred){
+let verified="tmdb_date_or_title";
+try{
+const ex=await tmdbEpisodeExternal(id,s,e);
+if(ex&&ex.tvdb_id&&inferred.tvdb_episode_id&&String(ex.tvdb_id)===String(inferred.tvdb_episode_id))verified="tmdb_tvdb_episode_id";
+}catch(_){}
+return{tvdb:inferred,tmdb:tmdbEpisode,match:verified}
+}
+return{tvdb:null,tmdb:tmdbEpisode,match:"tmdb_only"}
+}
+function parseMalEpisodes(ani){
+return Object.values(ani&&ani.episodes||{}).map(x=>({episode:Number(x.episode),tvdb_episode_id:x.tvdbEid||x.tvdbId||null,absolute:x.absoluteEpisodeNumber!=null?Number(x.absoluteEpisodeNumber):null,air_date:day(x.airDateUtc||x.airDate||x.airdate),title:(x.title&&(x.title.en||x.title["x-jat"]||x.title.x))||""})).filter(x=>Number.isInteger(x.episode)&&x.episode>0)
+}
+async function buildMalCache(malIds){
+const cache=new Map();
+await Promise.all(malIds.slice(0,8).map(async mal=>{
+try{cache.set(String(mal),parseMalEpisodes(await aniMal(mal)))}catch(e){cache.set(String(mal),[])}
+}));
+return cache
+}
+async function buildTitleCache(malIds,malCache){
+const cache=new Map();
+await Promise.all(malIds.slice(0,8).map(async mal=>{
+try{
+const ani=await aniMal(mal),jd=await jikan(mal);
+cache.set(String(mal),malTitleData(ani,jd))
+}catch(e){
+try{
+const jd=await jikan(mal);
+cache.set(String(mal),malTitleData(null,jd))
+}catch(_){cache.set(String(mal),{english:null,romanji:null,all:[]})}
+}
+}));
+return cache
+}
+function resolveMalEpisodeCached(malIds,tvdbEpisode,tmdbEpisode,malCache){
+for(const mal of malIds.slice(0,8)){
+const eps=malCache.get(String(mal))||[];
+if(tvdbEpisode&&tvdbEpisode.tvdb_episode_id){
+const x=eps.find(e=>e.tvdb_episode_id&&String(e.tvdb_episode_id)===String(tvdbEpisode.tvdb_episode_id));
+if(x)return{mal_id:String(mal),mal_episode:x.episode,match:"tvdb_episode_id",title:x.title}
+}
+if(tvdbEpisode&&tvdbEpisode.absolute!=null&&tvdbEpisode.absolute>0){
+const x=eps.find(e=>e.absolute!=null&&Number(e.absolute)===Number(tvdbEpisode.absolute));
+if(x)return{mal_id:String(mal),mal_episode:x.episode,match:"absolute",title:x.title}
+}
+if(tvdbEpisode&&tvdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tvdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length){
+const x=xs.find(e=>titleMatch(e.title,tvdbEpisode.title))||xs[0];
+return{mal_id:String(mal),mal_episode:x.episode,match:"air_date",title:x.title}
+}
+}
+if(tvdbEpisode&&tvdbEpisode.title){
+const x=eps.find(e=>titleMatch(e.title,tvdbEpisode.title));
+if(x)return{mal_id:String(mal),mal_episode:x.episode,match:"title",title:x.title}
+}
+if(tmdbEpisode&&tmdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tmdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length)return{mal_id:String(mal),mal_episode:xs[0].episode,match:"tmdb_air_date",title:xs[0].title}
+}
+}
+return null
+}
+async function resolveMalEpisode(malIds,tvdbEpisode,tmdbEpisode){
+const results=await Promise.all(malIds.slice(0,5).map(async mal=>{try{return{mal:String(mal),data:await aniMal(mal)}}catch(e){return{mal:String(mal),data:null}}}));
+for(const r of results){
+const eps=parseMalEpisodes(r.data);
+if(tvdbEpisode&&tvdbEpisode.tvdb_episode_id){
+const x=eps.find(e=>e.tvdb_episode_id&&String(e.tvdb_episode_id)===String(tvdbEpisode.tvdb_episode_id));
+if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"tvdb_episode_id",title:x.title}
+}
+if(tvdbEpisode&&tvdbEpisode.absolute!=null&&tvdbEpisode.absolute>0){
+const x=eps.find(e=>e.absolute!=null&&Number(e.absolute)===Number(tvdbEpisode.absolute));
+if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"absolute",title:x.title}
+}
+if(tvdbEpisode&&tvdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tvdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length){const x=xs.find(e=>titleMatch(e.title,tvdbEpisode.title))||xs[0];return{mal_id:r.mal,mal_episode:x.episode,match:"air_date",title:x.title}}
+}
+if(tvdbEpisode&&tvdbEpisode.title){
+const x=eps.find(e=>titleMatch(e.title,tvdbEpisode.title));
+if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"title",title:x.title}
+}
+if(tmdbEpisode&&tmdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tmdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length)return{mal_id:r.mal,mal_episode:xs[0].episode,match:"tmdb_air_date",title:xs[0].title}
+}
+}
+return null
+}
 async function populateWindow(id,s,start,end,seed,parent,oldSeason){
 const ext=await external(id),el=await eligibility(id,parent,ext);
 if(!el.ok){
@@ -73,33 +194,33 @@ let ani=null,aniSource="none";
 if(tvdbId){ani=await aniTvdb(tvdbId);if(ani&&ani.episodes)aniSource="tvdb"}
 if(!ani||!ani.episodes){ani=await aniTmdb(id,el.imdb);if(ani&&ani.episodes)aniSource="tmdb"}
 if(!ani||!ani.episodes)throw new Error(`ani.zip has no episodes for TMDB ${id} TVDB ${tvdbId}`);
-const tvdbEpisodes=aniEpisodeList(ani),oldEpisodes=oldSeason&&oldSeason.episodes||{},seasonCount=tvdbEpisodes.filter(x=>x.tvdb_season===s).length,total=Math.max(seasonCount,Number(oldSeason&&oldSeason.totalEpisodes||0),end);
-log(`TVDB SOURCE=${aniSource} TMDB=${id} TVDB=${tvdbId||"none"} episodes=${tvdbEpisodes.length} seasons=${uniq(tvdbEpisodes.map(x=>x.tvdb_season)).join(",")||"none"} TVDB S${s}=${seasonCount}`);
+const tvdbEpisodes=aniEpisodeList(ani),oldEpisodes=oldSeason&&oldSeason.episodes||{},tmdbEpisodes=await allTmdbEpisodes(id,series),seasonCount=tvdbEpisodes.filter(x=>x.tvdb_season===s).length,total=Math.max(seasonCount,Number(oldSeason&&oldSeason.totalEpisodes||0),end);
+log(`SOURCE=${aniSource} TMDB=${id} TVDB=${tvdbId||"none"} episodes=${tvdbEpisodes.length} seasons=${uniq(tvdbEpisodes.map(x=>x.tvdb_season)).join(",")||"none"} REQUEST S${s}E${start}-${end} TVDB_SAME_NUMBER=${seasonCount}`);
 const needed=[];for(let n=Math.max(1,start);n<=end;n++)if(!oldEpisodes[String(n)]||oldEpisodes[String(n)].mal_episode==null)needed.push(n);
-log(`WINDOW TMDB=${id} TVDB S${s} total=${total} range=${start}-${end} existing=${Object.keys(oldEpisodes).length} missing=${needed.length}`);
+log(`WINDOW TMDB=${id} S${s} total=${total} range=${start}-${end} existing=${Object.keys(oldEpisodes).length} missing=${needed.length}`);
 if(!needed.length){const sState=oldSeason||{tmdb_id:id,tvdb_id:tvdbId,totalEpisodes:total,episodes:oldEpisodes,mappedThrough:through(total,oldEpisodes),complete:through(total,oldEpisodes)>=total};return{eligible:true,seasonState:sState,mapped:0,failed:0}}
-const malCandidates=uniq([el.mal,...aniIds(ani),...(await arm(id,el.imdb,tvdbId)).ids]),tmdbEpisodes=await allTmdbEpisodes(id,series),added={},unresolved=[];
-for(const ep of needed){
-const tvdbEpisode=bestTvdbEpisode(tvdbEpisodes,s,ep);
-if(!tvdbEpisode){unresolved.push(ep);continue}
-let tmdbEpisode=bestTmdbEpisode(tmdbEpisodes,tvdbEpisode);
-if(!tmdbEpisode){try{const candidates=tmdbEpisodes.filter(x=>x.air_date&&tvdbEpisode.air_date&&dateMatch(x.air_date,tvdbEpisode.air_date));if(candidates.length===1)tmdbEpisode=candidates[0]}catch(_){}}
-const mal=await resolveMalEpisode(malCandidates,tvdbEpisode,tmdbEpisode);
-if(mal){
-const meta=await aniMal(mal.mal_id),jd=await jikan(mal.mal_id),mt=malTitleData(meta,jd);
-added[String(ep)]={title:tvdbEpisode.title||tmdbEpisode&&tmdbEpisode.title||"",episode_title:tvdbEpisode.title||tmdbEpisode&&tmdbEpisode.title||"",air_date:tvdbEpisode.air_date||tmdbEpisode&&tmdbEpisode.air_date||"",tvdb_id:tvdbId||null,tvdb_season:tvdbEpisode.tvdb_season,tvdb_episode:tvdbEpisode.tvdb_episode,tvdb_episode_id:tvdbEpisode.tvdb_episode_id,tmdb_id:id,tmdb_season:tmdbEpisode&&tmdbEpisode.tmdb_season!=null?tmdbEpisode.tmdb_season:null,tmdb_episode:tmdbEpisode&&tmdbEpisode.tmdb_episode!=null?tmdbEpisode.tmdb_episode:null,tmdb_episode_id:tmdbEpisode&&tmdbEpisode.tmdb_episode_id||null,mal_id:mal.mal_id,mal_episode:mal.mal_episode,mal_title:mt.romanji||mt.english||mal.title||null,mal_title_romanji:mt.romanji||null,mal_title_english:mt.english||null,titles:mt.all,match_source:mal.match,updatedAt:Date.now()};
-log(`RESOLVED TMDB=${id} TVDB S${s}E${ep} TVDB_ID=${tvdbEpisode.tvdb_episode_id||"none"} -> TMDB S${tmdbEpisode?tmdbEpisode.tmdb_season:"?"}E${tmdbEpisode?tmdbEpisode.tmdb_episode:"?"} TMDB_ID=${tmdbEpisode&&tmdbEpisode.tmdb_episode_id||"none"} -> MAL=${mal.mal_id} E${mal.mal_episode} via=${mal.match}`)
-}else unresolved.push(ep)
-}
+const armIds=(await arm(id,el.imdb,tvdbId)).ids,malCandidates=uniq([el.mal,...aniIds(ani),...armIds]),malCache=await buildMalCache(malCandidates),titleCache=await buildTitleCache(malCandidates,malCache),added={},unresolved=[];
+const resolveOne=async ep=>{
+const resolved=await resolveTvdbEpisode(id,s,ep,tvdbEpisodes,tmdbEpisodes);
+const tvdbEpisode=resolved.tvdb,tmdbEpisode=resolved.tmdb;
+if(!tmdbEpisode){unresolved.push(ep);return}
+if(!tvdbEpisode){unresolved.push(ep);log(`TVDB RESOLVE MISS TMDB=${id} REQUEST S${s}E${ep} TMDB_ID=${tmdbEpisode.tmdb_episode_id||"none"}`);return}
+const mal=resolveMalEpisodeCached(malCandidates,tvdbEpisode,tmdbEpisode,malCache);
+if(!mal){unresolved.push(ep);return}
+const mt=titleCache.get(String(mal.mal_id))||{english:null,romanji:null,all:[]};
+added[String(ep)]={title:tvdbEpisode.title||tmdbEpisode.title||"",episode_title:tvdbEpisode.title||tmdbEpisode.title||"",air_date:tvdbEpisode.air_date||tmdbEpisode.air_date||"",tvdb_id:tvdbId||null,tvdb_season:tvdbEpisode.tvdb_season,tvdb_episode:tvdbEpisode.tvdb_episode,tvdb_episode_id:tvdbEpisode.tvdb_episode_id,tmdb_id:id,tmdb_season:tmdbEpisode.tmdb_season,tmdb_episode:tmdbEpisode.tmdb_episode,tmdb_episode_id:tmdbEpisode.tmdb_episode_id||null,mal_id:mal.mal_id,mal_episode:mal.mal_episode,mal_title:mt.romanji||mt.english||mal.title||null,mal_title_romanji:mt.romanji||null,mal_title_english:mt.english||null,titles:mt.all,match_source:mal.match,updatedAt:Date.now()};
+log(`RESOLVED TMDB=${id} REQUEST S${s}E${ep} -> TVDB S${tvdbEpisode.tvdb_season}E${tvdbEpisode.tvdb_episode} TVDB_ID=${tvdbEpisode.tvdb_episode_id||"none"} -> TMDB S${tmdbEpisode.tmdb_season}E${tmdbEpisode.tmdb_episode} TMDB_ID=${tmdbEpisode.tmdb_episode_id||"none"} -> MAL=${mal.mal_id} E${mal.mal_episode} via=${mal.match}`)
+};
+for(let i=0;i<needed.length;i+=CONCURRENCY)await Promise.all(needed.slice(i,i+CONCURRENCY).map(resolveOne));
 const finalUnresolved=[];
 if(unresolved.length){
 for(let i=0;i<unresolved.length;i+=CONCURRENCY){
 const batch=unresolved.slice(i,i+CONCURRENCY),rs=await Promise.all(batch.map(async ep=>{try{return{ep,sh:await shinkro(id,s,ep)}}catch(e){return{ep,sh:null}}}));
 for(const{ep,sh}of rs){
 if(sh&&sh.mal_episode!=null){
-const tvdbEpisode=bestTvdbEpisode(tvdbEpisodes,s,ep),tmdbEpisode=tvdbEpisode?bestTmdbEpisode(tmdbEpisodes,tvdbEpisode):null,malId=String(sh.mal_id||el.mal),jd=await jikan(malId),aniM=await aniMal(malId),mt=malTitleData(aniM,jd);
-added[String(ep)]={title:tvdbEpisode&&tvdbEpisode.title||sh.anime_title||tmdbEpisode&&tmdbEpisode.title||"",episode_title:tvdbEpisode&&tvdbEpisode.title||"",air_date:tvdbEpisode&&tvdbEpisode.air_date||sh.air_date||"",tvdb_id:tvdbId||sh.tvdb_id||null,tvdb_season:tvdbEpisode&&tvdbEpisode.tvdb_season!=null?tvdbEpisode.tvdb_season:(sh.tvdb_season!=null?Number(sh.tvdb_season):s),tvdb_episode:tvdbEpisode&&tvdbEpisode.tvdb_episode!=null?tvdbEpisode.tvdb_episode:(sh.tvdb_episode!=null?Number(sh.tvdb_episode):ep),tvdb_episode_id:tvdbEpisode&&tvdbEpisode.tvdb_episode_id||sh.tvdb_episode_id||null,tmdb_id:id,tmdb_season:tmdbEpisode&&tmdbEpisode.tmdb_season!=null?tmdbEpisode.tmdb_season:null,tmdb_episode:tmdbEpisode&&tmdbEpisode.tmdb_episode!=null?tmdbEpisode.tmdb_episode:null,tmdb_episode_id:tmdbEpisode&&tmdbEpisode.tmdb_episode_id||null,mal_id:malId,mal_episode:Number(sh.mal_episode),mal_title:mt.romanji||mt.english||null,mal_title_romanji:mt.romanji||null,mal_title_english:mt.english||null,titles:mt.all,match_source:"shinkro",updatedAt:Date.now()};
-log(`SHINKRO RESCUE TMDB=${id} TVDB S${s}E${ep} -> MAL=${malId} E${sh.mal_episode}`)
+const resolved=await resolveTvdbEpisode(id,s,ep,tvdbEpisodes,tmdbEpisodes),tvdbEpisode=resolved.tvdb,tmdbEpisode=resolved.tmdb,malId=String(sh.mal_id||el.mal),mt=titleCache.get(malId)||{english:null,romanji:null,all:[]};
+added[String(ep)]={title:tvdbEpisode&&tvdbEpisode.title||sh.anime_title||tmdbEpisode&&tmdbEpisode.title||"",episode_title:tvdbEpisode&&tvdbEpisode.title||sh.episode_title||"",air_date:tvdbEpisode&&tvdbEpisode.air_date||sh.air_date||"",tvdb_id:tvdbId||sh.tvdb_id||null,tvdb_season:tvdbEpisode&&tvdbEpisode.tvdb_season!=null?tvdbEpisode.tvdb_season:(sh.tvdb_season!=null?Number(sh.tvdb_season):null),tvdb_episode:tvdbEpisode&&tvdbEpisode.tvdb_episode!=null?tvdbEpisode.tvdb_episode:(sh.tvdb_episode!=null?Number(sh.tvdb_episode):null),tvdb_episode_id:tvdbEpisode&&tvdbEpisode.tvdb_episode_id||sh.tvdb_episode_id||null,tmdb_id:id,tmdb_season:tmdbEpisode&&tmdbEpisode.tmdb_season!=null?tmdbEpisode.tmdb_season:null,tmdb_episode:tmdbEpisode&&tmdbEpisode.tmdb_episode!=null?tmdbEpisode.tmdb_episode:null,tmdb_episode_id:tmdbEpisode&&tmdbEpisode.tmdb_episode_id||null,mal_id:malId,mal_episode:Number(sh.mal_episode),mal_title:mt.romanji||mt.english||sh.anime_title||null,mal_title_romanji:mt.romanji||null,mal_title_english:mt.english||null,titles:mt.all,match_source:"shinkro",updatedAt:Date.now()};
+log(`SHINKRO RESCUE TMDB=${id} REQUEST S${s}E${ep} -> TVDB S${added[String(ep)].tvdb_season||"?"}E${added[String(ep)].tvdb_episode||"?"} TVDB_ID=${added[String(ep)].tvdb_episode_id||"none"} -> MAL=${malId} E${sh.mal_episode}`)
 }else finalUnresolved.push(ep)
 }
 }
@@ -109,13 +230,13 @@ state.mappedThrough=through(total,state.episodes);state.complete=state.mappedThr
 const st=db();await st.setJSON(`anime:${id}:season:${s}`,state);
 const first=Object.values(added)[0]||{},next=Object.assign({},parent||{},{tmdb_id:id,imdb_id:el.imdb,tvdb_id:tvdbId,mal_id:el.mal,title:series.name||series.original_name||seed.title||"",titles:titles([...(parent&&parent.titles||[]),series.name,series.original_name,...(first.titles||[])]),mal_title:first.mal_title||parent&&parent.mal_title||null,mal_title_english:first.mal_title_english||parent&&parent.mal_title_english||null,mal_title_romanji:first.mal_title_romanji||parent&&parent.mal_title_romanji||null,animeEligible:true,animeEligibilityReason:"SOURCE_CONFIRMED",updatedAt:Date.now()});
 await st.setJSON(`anime:${id}`,next);
-log(`WINDOW DONE TMDB=${id} TVDB S${s} range=${start}-${end} mapped=${Object.keys(added).length} failed=${finalUnresolved.length} mappedThrough=${state.mappedThrough} src=${aniSource}`);
+log(`WINDOW DONE TMDB=${id} S${s} range=${start}-${end} mapped=${Object.keys(added).length} failed=${finalUnresolved.length} mappedThrough=${state.mappedThrough} src=${aniSource}`);
 return{eligible:true,seasonState:state,mapped:Object.keys(added).length,failed:finalUnresolved.length}
 }
-async function populate(seed){const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),parent=await readSeries(st,id),old=await readSeason(st,id,s),current=old&&old.episodes||{},mappedThrough=Number(old&&old.mappedThrough||0),need=current[String(e)]&&current[String(e)].mal_episode!=null?[]:[e];if(!need.length){log(`REQUESTED EPISODE ALREADY MAPPED TMDB=${id} S${s}E${e}`);return{ok:true,skipped:true,seasonState:old}}const start=Math.max(1,e),end=start+MAX_WINDOW-1;log(`POPULATE REQUEST TMDB=${id} TVDB S${s}E${e} mappedThrough=${mappedThrough} range=${start}-${end}`);return populateWindow(id,s,start,end,seed,parent,old)}
-async function advanceBoundary(id,s,e,ss,seed,parent){if(ss&&ss.exhausted){log(`EXHAUSTED TMDB=${id} TVDB S${s}`);return{ok:true,existing:true,boundary:true,exhausted:true,seasonState:ss}}const total=Number(ss&&ss.totalEpisodes||0);if(total&&e<total){const start=Math.max(1,e+1),end=Math.min(total,start+MAX_WINDOW-1);log(`BOUNDARY ADVANCE TMDB=${id} TVDB S${s} E${e} -> S${s}E${start}-${end}`);const r=await populateWindow(id,s,start,end,seed,parent,ss);return Object.assign({},r,{boundary:true,advanced:true})}const st=db(),now=Date.now(),seasonState=Object.assign({},ss||{},{tmdb_id:id,totalEpisodes:total,mappedThrough:Number(ss&&ss.mappedThrough||e),complete:true,exhausted:true,exhaustedAt:now,updatedAt:now});await st.setJSON(`anime:${id}:season:${s}`,seasonState);log(`SEASON EXHAUSTED TMDB=${id} TVDB S${s}`);return{ok:true,existing:true,boundary:true,exhausted:true,seasonState}}
+async function populate(seed){const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),parent=await readSeries(st,id),old=await readSeason(st,id,s),current=old&&old.episodes||{},mappedThrough=Number(old&&old.mappedThrough||0),need=current[String(e)]&&current[String(e)].mal_episode!=null?[]:[e];if(!need.length){log(`REQUESTED EPISODE ALREADY MAPPED TMDB=${id} S${s}E${e}`);return{ok:true,skipped:true,seasonState:old}}const start=Math.max(1,e),end=start+MAX_WINDOW-1;log(`POPULATE REQUEST TMDB=${id} S${s}E${e} mappedThrough=${mappedThrough} range=${start}-${end}`);return populateWindow(id,s,start,end,seed,parent,old)}
+async function advanceBoundary(id,s,e,ss,seed,parent){if(ss&&ss.exhausted){log(`EXHAUSTED TMDB=${id} S${s}`);return{ok:true,existing:true,boundary:true,exhausted:true,seasonState:ss}}const total=Number(ss&&ss.totalEpisodes||0);if(total&&e<total){const start=Math.max(1,e+1),end=Math.min(total,start+MAX_WINDOW-1);log(`BOUNDARY ADVANCE TMDB=${id} S${s} E${e} -> S${s}E${start}-${end}`);const r=await populateWindow(id,s,start,end,seed,parent,ss);return Object.assign({},r,{boundary:true,advanced:true})}const st=db(),now=Date.now(),seasonState=Object.assign({},ss||{},{tmdb_id:id,totalEpisodes:total,mappedThrough:Number(ss&&ss.mappedThrough||e),complete:true,exhausted:true,exhaustedAt:now,updatedAt:now});await st.setJSON(`anime:${id}:season:${s}`,seasonState);log(`SEASON EXHAUSTED TMDB=${id} S${s}`);return{ok:true,existing:true,boundary:true,exhausted:true,seasonState}}
 async function populateIfNeeded(seed){const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),existing=await lookup(id,s,e);if(existing){const ss=await readSeason(st,id,s);if(ss&&Number(ss.mappedThrough)===e){const locked=await lock(st,id);if(!locked)return{ok:false,locked:true,boundary:true};try{return await advanceBoundary(id,s,e,ss,seed,await readSeries(st,id))}finally{await unlock(st,id)}}return{ok:true,existing:true,boundary:false}}const old=await readSeason(st,id,s),locked=await lock(st,id);if(!locked)return{ok:false,locked:true};try{const r=await populate(seed);return Object.assign({},r,{boundary:false})}finally{await unlock(st,id)}}
 async function boundaryState(id,s,e){const st=db(),ss=await readSeason(st,id,s);if(!ss)return{boundary:false};const isBoundary=Number(ss.mappedThrough)===e;return{boundary:isBoundary,seasonComplete:!!ss.complete,totalEpisodes:Number(ss.totalEpisodes||0),mappedThrough:Number(ss.mappedThrough||0)}}
 async function fallback(id,s,e){const r=await fetchJson(`${SHINKRO_URL}?tmdbId=${encodeURIComponent(id)}&season=${s}&episode=${e}`,7000);return r.state==="HIT"&&r.data&&r.data.ok?r.data.mapping:null}
-exports.handler=async event=>{const method=(event.httpMethod||"GET").toUpperCase();if(method==="OPTIONS")return json(204,{});if(method!=="GET")return json(405,{ok:false,error:"Method not allowed"});try{const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode);log(`REQUEST TMDB=${id} TVDB S${p.season}E${p.episode}`);if(!/^\d+$/.test(id)||id.length>MAX_ID||s===null||!e)return json(400,{ok:false,error:"tmdbId, season and episode are required"});const m=await lookup(id,s,e);if(m)return json(200,{ok:true,source:"lazy-db",mapping:m,state:await boundaryState(id,s,e)});if(p.resolve==="1"){const st=db(),parent=await readSeries(st,id),ext=await external(id),el=await eligibility(id,parent,ext);if(!el.ok)return json(404,{ok:false,mapping:null,error:el.source,state:{animeEligible:false,temporary:!!el.temporary}});const f=await fallback(id,s,e);return f?json(200,{ok:true,source:"reference-fallback",mapping:f,state:await boundaryState(id,s,e)}):json(404,{ok:false,mapping:null,error:"Reference mapping not found",state:await boundaryState(id,s,e)})}return json(404,{ok:false,mapping:null,error:"Anime mapping not found",state:await boundaryState(id,s,e)})}catch(error){console.error("[ANIME LAZY MAPPING] FATAL",error);return json(500,{ok:false,error:error&&error.message?error.message:"Mapping service error"})}};
+exports.handler=async event=>{const method=(event.httpMethod||"GET").toUpperCase();if(method==="OPTIONS")return json(204,{});if(method!=="GET")return json(405,{ok:false,error:"Method not allowed"});try{const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode);log(`REQUEST TMDB=${id} S${p.season}E${p.episode}`);if(!/^\d+$/.test(id)||id.length>MAX_ID||s===null||!e)return json(400,{ok:false,error:"tmdbId, season and episode are required"});const m=await lookup(id,s,e);if(m)return json(200,{ok:true,source:"lazy-db",mapping:m,state:await boundaryState(id,s,e)});if(p.resolve==="1"){const st=db(),parent=await readSeries(st,id),ext=await external(id),el=await eligibility(id,parent,ext);if(!el.ok)return json(404,{ok:false,mapping:null,error:el.source,state:{animeEligible:false,temporary:!!el.temporary}});const f=await fallback(id,s,e);return f?json(200,{ok:true,source:"reference-fallback",mapping:f,state:await boundaryState(id,s,e)}):json(404,{ok:false,mapping:null,error:"Reference mapping not found",state:await boundaryState(id,s,e)})}return json(404,{ok:false,mapping:null,error:"Anime mapping not found",state:await boundaryState(id,s,e)})}catch(error){console.error("[ANIME LAZY MAPPING] FATAL",error);return json(500,{ok:false,error:error&&error.message?error.message:"Mapping service error"})}};
 exports.populateIfNeeded=populateIfNeeded;
