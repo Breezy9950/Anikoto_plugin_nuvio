@@ -311,10 +311,10 @@ async function dbMapping(tmdbId,season,episode){
   const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
   const d=await json(u,{headers:{"Accept":"application/json"}},8000);
   if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] DB HIT",{tmdbId,season,episode});
-    return{mapping:d.mapping,fromDb:true}
+    console.log("[AniZone Lazy] DB HIT",{tmdbId,season,episode,boundary:!!(d.state&&d.state.boundary)});
+    return{mapping:d.mapping,fromDb:true,state:d.state||null}
   }
-  console.log("[AniZone Lazy] DB MISS",{tmdbId,season,episode,status:d&&d.status});
+  console.log("[AniZone Lazy] DB MISS",{tmdbId,season,episode,status:d&&d.status,error:d&&d.error});
   return null
 }
 
@@ -326,8 +326,8 @@ async function fallbackMapping(tmdbId,season,episode){
   const u=MAPPING_URL+"?resolve=1&tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
   const d=await json(u,{headers:{"Accept":"application/json"}},20000);
   if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] FALLBACK HIT",{tmdbId,season,episode});
-    return{mapping:d.mapping,fromDb:false}
+    console.log("[AniZone Lazy] FALLBACK HIT",{tmdbId,season,episode,boundary:!!(d.state&&d.state.boundary)});
+    return{mapping:d.mapping,fromDb:false,state:d.state||null}
   }
   console.log("[AniZone Lazy] FALLBACK FAILED",{tmdbId,season,episode,status:d&&d.status});
   return null
@@ -408,7 +408,8 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     malId=mapMalId(m);
     seasonName=String(m.season_name||m.seasonName||"");
 
-    if(!mappingResult.fromDb){
+    if(!mappingResult.fromDb||mappingResult.state&&mappingResult.state.boundary){
+      console.log("[AniZone Lazy] POPULATION TRIGGER",{tmdbId,season,episode,boundary:!!(mappingResult.state&&mappingResult.state.boundary),fromDb:!!mappingResult.fromDb});
       triggerPopulation({
         tmdb_id:String(m.tmdb_id||m.tmdbId||tmdbId),
         imdb_id:imdbId,
@@ -429,13 +430,14 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
   }
 
-  if(!title&&targetTitles.length)title=targetTitles[0];
-  if(!title){
-    console.log("[AniZone Lazy] EMPTY TITLE AFTER MAPPING");
-    return[]
+  const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season):null;
+  if(tmdbInfo){
+    if(tmdbInfo.title&&!title)title=tmdbInfo.title;
+    if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
+    seasonName=seasonName||tmdbInfo.seasonName||""
   }
 
-  const specific=season===1||movie?[...targetTitles,title,...altTitles]:[...targetTitles];
+  const specific=targetTitles.length?targetTitles:[title,...altTitles].filter(Boolean);
   const base=cleanQuery(title);
 
   let cards=await searchCards(base);
