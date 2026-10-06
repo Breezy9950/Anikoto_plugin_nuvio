@@ -1,5 +1,5 @@
 const{getStore}=require("@netlify/blobs");
-const STORE="anime-lazy-resolution",MAX_ID=50,MAX_EP=100000,MAX_WINDOW=100,LOCK_TTL=2*60*1000,TIMEOUT=6000,CONCURRENCY=4,TMDB_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706",SHINKRO_URL=process.env.ANIME_MAPPING_URL||"https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping";
+const STORE="anime-lazy-resolution",MAX_ID=50,MAX_EP=100000,MAX_WINDOW=12,LOCK_TTL=2*60*1000,TIMEOUT=6000,CONCURRENCY=4,TMDB_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706",SHINKRO_URL=process.env.ANIME_MAPPING_URL||"https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping";
 function log(x){console.log(`[ANIME LAZY MAPPING] ${x}`)}
 function json(status,body){return{statusCode:status,headers:{"Content-Type":"application/json","Cache-Control":"no-store","Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET,OPTIONS","Access-Control-Allow-Headers":"Content-Type"},body:JSON.stringify(body)}}
 function num(v,max=MAX_EP){const n=Number(v);return Number.isInteger(n)&&n>=0&&n<=max?n:null}
@@ -122,7 +122,7 @@ async function populate(seed){
 const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),parent=await readSeries(st,id),old=await readSeason(st,id,s),current=old&&old.episodes||{},mappedThrough=Number(old&&old.mappedThrough||0),need=current[String(e)]&&current[String(e)].mal_episode!=null?[]:[e];
 if(!need.length){log(`REQUESTED EPISODE ALREADY MAPPED TMDB=${id} S${s}E${e}`);return{ok:true,skipped:true,seasonState:old}}
 const start=e<=mappedThrough?e:Math.max(1,mappedThrough+1);
-const end=e<=mappedThrough?e:Math.max(start,Math.min(e,start+MAX_WINDOW-1));
+const end=e<=mappedThrough?e:start+MAX_WINDOW-1;
 log(`POPULATE REQUEST TMDB=${id} S${s}E${e} mappedThrough=${mappedThrough} range=${start}-${end}`);
 return populateWindow(id,s,start,end,seed,parent,old)
 }
