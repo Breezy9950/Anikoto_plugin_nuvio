@@ -102,6 +102,7 @@ if(!Number.isInteger(targetEpisode)||targetEpisode<1)continue;
 mapped.push({candidate,targetEpisode});
 }
 if(!mapped.length)return null;
+log(`SHINKRO CANDIDATES TVDB-SEASON=S${season}E${episode} ${mapped.map(x=>`MAL=${x.candidate.malid}->E${x.targetEpisode} useMapping=${!!x.candidate.useMapping} start=${Number(x.candidate.start)||0}`).join(" | ")}`);
 mapped.sort((a,b)=>{
 const am=a.candidate.useMapping?1:0;
 const bm=b.candidate.useMapping?1:0;
@@ -114,6 +115,7 @@ return Number(a.candidate.malid)-Number(b.candidate.malid);
 const selected=mapped[0];
 const c=selected.candidate;
 const seasonMapping=c.useMapping?c.animeMapping.find(x=>Number(x.tvdbseason)===season):null;
+log(`SHINKRO SELECTED MAL=${c.malid} E${selected.targetEpisode} useMapping=${!!c.useMapping} start=${Number(c.start)||0} mappingType=${seasonMapping&&seasonMapping.mappingType||"range"}`);
 return{
 tmdb_id:null,
 tvdb_id:null,
@@ -188,15 +190,16 @@ if(!/^\d+$/.test(tmdbId)||tmdbId.length>MAX_ID_LENGTH||!season||!episode){
 return json(400,{ok:false,error:"tmdbId, season and episode are required"});
 }
 const store=getStore({
-  name:STORE_NAME,
-  siteID:process.env.NETLIFY_SITE_ID,
-  token:process.env.NETLIFY_AUTH_TOKEN
+name:STORE_NAME,
+siteID:process.env.NETLIFY_SITE_ID,
+token:process.env.NETLIFY_AUTH_TOKEN
 });
 const tvdbId=await getTmdbTvdbId(tmdbId,store);
 if(!tvdbId){
 log(`TMDB->TVDB MISS TMDB=${tmdbId}`);
 return json(404,{ok:false,mapping:null,error:"TMDB to TVDB mapping not found"});
 }
+log(`TMDB->TVDB HIT TMDB=${tmdbId} TVDB=${tvdbId} S${season}E${episode}`);
 const loaded=await loadCandidates(store,tvdbId);
 if(loaded.source==="legacy"&&!loaded.index){
 return json(503,{ok:false,error:"Shinkro mapping index is not available"});
