@@ -333,6 +333,27 @@ async function fallbackMapping(tmdbId,season,episode){
   return null
 }
 
+function pollLazyMapping(tmdbId,season,episode,maxWait){
+  const delays=[250,500,1000,1500,2000];
+  const start=Date.now();
+  return new Promise(resolve=>{
+    let i=0;
+    const attempt=()=>{
+      if(i>=delays.length)return resolve(null);
+      if(Date.now()-start>=maxWait)return resolve(null);
+      const d=delays[i++];
+      setTimeout(()=>{
+        if(Date.now()-start>=maxWait)return resolve(null);
+        dbMapping(tmdbId,season,episode).then(r=>{
+          if(r&&r.mapping)return resolve(r);
+          attempt()
+        }).catch(()=>attempt())
+      },d)
+    };
+    attempt()
+  })
+}
+
 function triggerPopulation(seed){
   if(!seed||!seed.tmdb_id)return;
   try{
@@ -396,8 +417,16 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     mappingResult=await dbMapping(tmdbId,season,episode);
     if(!mappingResult)mappingResult=await fallbackMapping(tmdbId,season,episode);
     if(!mappingResult||!mappingResult.mapping){
-      console.log("[AniZone Lazy] NO MAPPING AVAILABLE");
-      return[]
+      console.log("[AniZone Lazy] NO MAPPING AVAILABLE, TRIGGERING POPULATION");
+      triggerPopulation({tmdb_id:tmdbId,season,episode});
+      const polled=await pollLazyMapping(tmdbId,season,episode,8000);
+      if(polled&&polled.mapping){
+        console.log("[AniZone Lazy] POLL SUCCESS");
+        mappingResult=polled
+      }else{
+        console.log("[AniZone Lazy] POLL TIMED OUT");
+        return[]
+      }
     }
 
     const m=mappingResult.mapping;
