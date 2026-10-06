@@ -1,12 +1,18 @@
 const{getStore}=require("@netlify/blobs");
 const STORE_NAME="anime-resolution-cache";
 const INDEX_KEY="_shinkro_index";
+const TVDB_PREFIX="_shinkro:tvdb:";
+const MANIFEST_KEY="_shinkro:manifest";
 const TMDB_TVDB_PREFIX="_tmdb_tvdb_";
 const MAX_ID_LENGTH=50;
 const MAX_EPISODE=100000;
 const TMDB_API_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706";
 const TMDB_TIMEOUT=5000;
 const TVDB_CACHE_TTL=7*24*60*60*1000;
+const INDEX_MEM_TTL=60_000;
+let _manifestCache={data:null,at:0};
+let _legacyIndexCache={data:null,at:0};
+
 function log(message){console.log(`[ANIME MAPPING] ${message}`);}
 function json(statusCode,body){
 return{
@@ -26,14 +32,14 @@ const n=Number(value);
 return Number.isInteger(n)&&n>0&&n<=MAX_EPISODE?n:null;
 }
 function fetchWithTimeout(url,options={},timeoutMs=TMDB_TIMEOUT){
-const timer={id:null};
-const timeout=new Promise((_,reject)=>{timer.id=setTimeout(()=>reject(new Error("Timeout")),timeoutMs);});
-return Promise.race([fetch(url,options),timeout]).finally(()=>{if(timer.id!==null)clearTimeout(timer.id);});
+const controller=new AbortController();
+const timer=setTimeout(()=>controller.abort(),timeoutMs);
+return fetch(url,Object.assign({},options,{signal:controller.signal})).finally(()=>clearTimeout(timer));
 }
 async function getTmdbTvdbId(tmdbId,store){
 const key=`${TMDB_TVDB_PREFIX}${tmdbId}`;
 try{
-const cached=await store.get(key,{type:"json",consistency:"strong"});
+const cached=await store.get(key,{type:"json",consistency:"eventual"});
 if(cached&&cached.updatedAt&&Date.now()-Number(cached.updatedAt)<TVDB_CACHE_TTL)return cached.tvdbId?String(cached.tvdbId):null;
 }catch(error){log(`TMDB cache read failed: ${error.message}`);}
 try{
@@ -126,6 +132,47 @@ mappingType:seasonMapping&&seasonMapping.mappingType||"range"
 }
 };
 }
+async function loadCandidates(store,tvdbId){
+const now=Date.now();
+if(!_manifestCache.data||now-_manifestCache.at>=INDEX_MEM_TTL){
+try{
+const manifest=await store.get(MANIFEST_KEY,{type:"json",consistency:"eventual"});
+_manifestCache={data:manifest||null,at:now};
+if(manifest&&manifest.version)log("MANIFEST LOADED");
+else log("MANIFEST MISSING");
+}catch(error){
+log(`Manifest read failed: ${error.message}`);
+_manifestCache={data:null,at:now};
+}
+}
+const manifest=_manifestCache.data;
+if(manifest&&manifest.version&&Number(manifest.count)>0){
+try{
+const list=await store.get(`${TVDB_PREFIX}${tvdbId}`,{type:"json",consistency:"eventual"});
+if(Array.isArray(list)&&list.length)return{source:"per-tvdb",candidates:list,index:manifest};
+log(`PER-TVDB MISS TVDB=${tvdbId}`);
+return{source:"per-tvdb",candidates:null,index:manifest};
+}catch(error){
+log(`Per-TVDB read failed: ${error.message}`);
+return{source:"per-tvdb",candidates:null,index:manifest};
+}
+}
+if(!_legacyIndexCache.data||now-_legacyIndexCache.at>=INDEX_MEM_TTL){
+log("INDEX CACHE MISS");
+try{
+const idx=await store.get(INDEX_KEY,{type:"json",consistency:"eventual"});
+_legacyIndexCache={data:idx||null,at:now};
+}catch(error){
+log(`Index read failed: ${error.message}`);
+_legacyIndexCache={data:null,at:now};
+}
+}else{
+log("INDEX CACHE HIT");
+}
+const idx=_legacyIndexCache.data;
+if(!idx||!idx.byTvdb||typeof idx.byTvdb!=="object")return{source:"legacy",candidates:null,index:null};
+return{source:"legacy",candidates:idx.byTvdb[tvdbId]||null,index:idx};
+}
 exports.handler=async event=>{
 console.log("[ANIME MAPPING] REQUEST RECEIVED",event.queryStringParameters||{});
 const started=Date.now();
@@ -145,18 +192,18 @@ const store=getStore({
   siteID:process.env.NETLIFY_SITE_ID,
   token:process.env.NETLIFY_AUTH_TOKEN
 });
-const index=await store.get(INDEX_KEY,{type:"json",consistency:"strong"});
-if(!index||!index.byTvdb||typeof index.byTvdb!=="object"){
-return json(503,{ok:false,error:"Shinkro mapping index is not available"});
-}
 const tvdbId=await getTmdbTvdbId(tmdbId,store);
 if(!tvdbId){
 log(`TMDB->TVDB MISS TMDB=${tmdbId}`);
 return json(404,{ok:false,mapping:null,error:"TMDB to TVDB mapping not found"});
 }
-const candidates=index.byTvdb[tvdbId];
+const loaded=await loadCandidates(store,tvdbId);
+if(loaded.source==="legacy"&&!loaded.index){
+return json(503,{ok:false,error:"Shinkro mapping index is not available"});
+}
+const candidates=loaded.candidates;
 if(!Array.isArray(candidates)||!candidates.length){
-log(`SHINKRO TVDB MISS TVDB=${tvdbId}`);
+log(`SHINKRO TVDB MISS TVDB=${tvdbId} source=${loaded.source}`);
 return json(404,{ok:false,mapping:null,error:"Shinkro mapping not found"});
 }
 const mapping=chooseMapping(candidates,season,episode);
@@ -167,7 +214,7 @@ return json(404,{ok:false,mapping:null,error:"Shinkro episode mapping not found"
 mapping.tmdb_id=tmdbId;
 mapping.tvdb_id=tvdbId;
 log(`MAPPING HIT TMDB=${tmdbId} TVDB=${tvdbId} S${season}E${episode} -> MAL=${mapping.mal_id} E${mapping.mal_episode} title=${mapping.anime_title||"?"} time=${Date.now()-started}ms`);
-return json(200,{ok:true,source:"shinkro",updatedAt:index.updatedAt||null,mapping});
+return json(200,{ok:true,source:"shinkro",updatedAt:(loaded.index&&loaded.index.updatedAt)||null,mapping});
 }catch(error){
 console.error(`[ANIME MAPPING] FATAL after ${Date.now()-started}ms`,error);
 return json(500,{ok:false,error:error&&error.message?error.message:"Mapping service error"});
