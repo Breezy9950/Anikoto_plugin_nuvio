@@ -2,9 +2,12 @@ const{getStore}=require("@netlify/blobs");
 const YAML=require("yaml");
 const STORE_NAME="anime-resolution-cache";
 const INDEX_KEY="_shinkro_index";
+const MANIFEST_KEY="_shinkro:manifest";
+const TVDB_PREFIX="_shinkro:tvdb:";
 const SOURCE_URL="https://raw.githubusercontent.com/shinkro/community-mapping/main/tvdb-mal.yaml";
 const MAX_SOURCE_BYTES=5*1024*1024;
 const MAX_INDEX_BYTES=5*1024*1024;
+const WRITE_CONCURRENCY=8;
 
 function log(message){console.log(`[SHINKRO] ${message}`);}
 function normalizeCandidate(entry){
@@ -84,9 +87,25 @@ const store=getStore({
   siteID:process.env.NETLIFY_SITE_ID,
   token:process.env.NETLIFY_AUTH_TOKEN
 });
+const ids=Object.keys(index.byTvdb);
+let written=0;
+for(let i=0;i<ids.length;i+=WRITE_CONCURRENCY){
+const batch=ids.slice(i,i+WRITE_CONCURRENCY);
+await Promise.all(batch.map(async id=>{
+try{
+await store.setJSON(`${TVDB_PREFIX}${id}`,index.byTvdb[id]);
+written++;
+}catch(error){
+log(`Per-TVDB write failed id=${id} error=${error.message}`);
+}
+}));
+}
+log(`Per-TVDB writes ok=${written}/${ids.length}`);
+await store.setJSON(MANIFEST_KEY,{version:1,updatedAt:index.updatedAt,count:written});
+log(`Manifest write SUCCESS ${MANIFEST_KEY}`);
 await store.setJSON(INDEX_KEY,index);
 log(`Blob write SUCCESS ${INDEX_KEY}`);
-log(`Updater SUCCESS source=${sourceBytes}B index=${indexBytes}B time=${Date.now()-started}ms`);
+log(`Updater SUCCESS source=${sourceBytes}B index=${indexBytes}B perTvdb=${written} time=${Date.now()-started}ms`);
 log("========================================");
 }catch(error){
 console.error(`[SHINKRO] Updater FAILED after ${Date.now()-started}ms`,error);
