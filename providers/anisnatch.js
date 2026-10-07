@@ -230,9 +230,9 @@ async function loadServers(aniId,episode,token){
   }else log(`loadSVs server invalid type=${typeof r.server} value=${JSON.stringify(r.server).slice(0,500)}`);
   if(r.success!==true||!r.server||typeof r.server!=="object"){log("loadSVs rejected: success/server validation failed");return[]}
   const out=[];
-  for(const category of ["HSub","hardsub","hard-sub","hsub"]){const arr=normalizeServerArray(r.server[category]);log(`loadSVs expected category=${category} count=${arr.length}`);for(const x of arr)out.push({...x,_category:category})}
-  const seen=new Set();const unique=out.filter(x=>{const k=String(x.source||"")+"|"+String(x.title||"");if(seen.has(k))return false;seen.add(k);return true});
-  log(`loadSVs selected hard-sub servers=${unique.length}`);for(let i=0;i<Math.min(unique.length,12);i++){const x=unique[i];log(`selected[${i}] category=${x._category} source=${String(x.source||"")} title=${String(x.title||"")}`)}
+  for(const category of Object.keys(r.server)){const arr=normalizeServerArray(r.server[category]);log(`loadSVs category=${category} count=${arr.length}`);for(const x of arr)out.push({...x,_category:category})}
+  const seen=new Set();const unique=out.filter(x=>{const k=String(x.source||"")+"|"+String(x.title||"")+"|"+String(x._category||"");if(seen.has(k))return false;seen.add(k);return true});
+  log(`loadSVs selected servers=${unique.length}`);for(let i=0;i<Math.min(unique.length,20);i++){const x=unique[i];log(`selected[${i}] category=${x._category} source=${String(x.source||"")} title=${String(x.title||"")}`)}
   return unique
 }
 function signAniSnatchUrl(url){
@@ -282,14 +282,10 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     if(!servers.length)return[];
     log(`server resolution candidates=${servers.length}`);
     const valid=await allSettledValues(servers.map(srv=>async()=>{
-      const context=[srv.title,srv.source,srv._category].join(" ");
-      if(!isHardCategory(srv._category)){log(`server rejected non-hard category=${srv._category} source=${String(srv.source||"")} title=${String(srv.title||"")}`);return[]}
-      if(isDub(context)){log(`server rejected dub source=${String(srv.source||"")} title=${String(srv.title||"")}`);return[]}
-      if(isSoft(context)){log(`server rejected soft-sub source=${String(srv.source||"")} title=${String(srv.title||"")}`);return[]}
-      log(`resolving hard-sub source=${String(srv.source||"")} title=${String(srv.title||"")}`);
+      log(`resolving source category=${String(srv._category||"")} source=${String(srv.source||"")} title=${String(srv.title||"")}`);
       const resolved=await resolveExternal(srv);log(`resolved source=${String(srv.source||"")} results=${resolved.length}`);return resolved
     }),SOURCE_TIMEOUT);
-    const out=[];for(const a of valid)for(const x of a||[])if(x&&x.url&&!isDub(x.title)&&!isSoft(x.title)&&!out.some(y=>y.url===x.url))out.push(x);
+    const out=[];for(const a of valid)for(const x of a||[])if(x&&x.url&&!out.some(y=>y.url===x.url))out.push(x);
     return out
   }catch(e){log("Provider failed: "+(e&&e.message||e));return[]}
 }
