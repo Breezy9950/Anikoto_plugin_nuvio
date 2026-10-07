@@ -72,7 +72,7 @@
       "description": "Reanime streams via mapper-first MAL->AniList resolution with native reanime search fallback",
       "version": "1.0.0",
       "author": "Nuvio Team",
-      "filename": "providers/reanime-lazy.js",
+      "filename": "providers/reanime.js",
       "supportedTypes": [
         "tv",
         "movie"
