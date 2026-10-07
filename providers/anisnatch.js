@@ -58,8 +58,6 @@ async function allSettledValues(tasks,ms=SOURCE_TIMEOUT){
     .filter(Boolean)
 }
 
-function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
-
 function uniq(a){
   return[...new Set((a||[]).filter(Boolean).map(String))]
 }
@@ -118,13 +116,7 @@ async function inspectHls(url,headers,meta={}){
     explicitQuality(meta.title)
   );
 
-  /*
-   * Accept any master playlist with at least one variant. Do NOT
-   * require 1080p — MegaPlay frequently returns 720p-only masters,
-   * and rejecting them silently discards valid streams.
-   */
   if(max>0)return{url,max,master:true};
-
   if(explicit>0)return{url,max:explicit,master:false};
 
   if(/^#EXTM3U/i.test(String(h).trim())){
@@ -146,11 +138,6 @@ function hostForSource(source){
   if(s.startsWith("vidtube/"))return"https://vidtube.site";
 
   return null
-}
-
-function pageForSource(source){
-  const proxy=STATE.proxyParam||PROXY_PARAM;
-  return BASE+"/video/"+String(source||"")+"-"+proxy+"-en"
 }
 
 function b64std(a){
@@ -535,11 +522,6 @@ function utf8enc(s){
   return new Uint8Array(a)
 }
 
-/*
- * SHA-256 round constants (NIST FIPS 180-4). The previous table had
- * scrambled entries around index 7-15 and duplicated values at 46+,
- * which produced an incorrect HMAC and invalid signed URLs.
- */
 const SHA_K=[
   1116352408,1899447441,3049323471,3921009573,961987163,1508970993,
   2453635748,2870763221,3624379352,310522625,606847678,1426881987,
@@ -1028,7 +1010,9 @@ const STATE={
   timeOffset:0,
   snatchToken:null,
   proxyParam:null,
-  initPromise:null
+  initPromise:null,
+  preferDub:false,
+  mappedMalId:null
 };
 
 async function initCrypto(){
@@ -1290,6 +1274,9 @@ async function lazyMapping(tmdbId,season,episode){
       titles:Array.isArray(m.titles)?
         m.titles.filter(Boolean).map(String):
         [],
+      malTitleRomanji:m.mal_title_romanji||null,
+      malTitleEnglish:m.mal_title_english||null,
+      malTitle:m.mal_title||null,
       source:d.source||"lazy"
     }
   }catch(e){
@@ -1333,8 +1320,20 @@ async function tmdbTitle(id,type){
   }
 }
 
-async function findAniSnatch(titleData){
+/*
+ * Search AniSnatch for the mapped anime.
+ *
+ * When mappedMalId is provided (from the lazy mapper), the search
+ * result whose `al` (MAL id) field equals it is preferred over any
+ * title-similarity match. That is the only reliable way to lock in
+ * the correct season/series when AniSnatch has several entries that
+ * share the same base title.
+ */
+async function findAniSnatch(titleData,mappedMalId){
   const qs=uniq([
+    titleData&&titleData.malTitleRomanji,
+    titleData&&titleData.malTitleEnglish,
+    titleData&&titleData.malTitle,
     titleData&&titleData.title,
     ...(titleData&&titleData.titles||[])
   ])
@@ -1393,6 +1392,42 @@ async function findAniSnatch(titleData){
 
   if(!all.length)return null;
 
+  /*
+   * Mapper's mal_id is authoritative. If we have it, pick the
+   * AniSnatch entry whose `al` field matches it. Do this before
+   * any title scoring.
+   */
+  if(mappedMalId){
+    const wanted=String(mappedMalId);
+
+    for(const x of all){
+      const al=String(x.al||x.mal||x.mal_id||"");
+      if(al&&al===wanted){
+        const id=x.id!=null?x.id:x.al;
+        if(id==null)
+          continue;
+
+        log(`findAniSnatch matched mapper malId=${wanted}`);
+
+        return{
+          aniId:String(id),
+          title:String(
+            x.title_en||
+            x.title||
+            x.name||
+            titleData.title
+          ),
+          score:100
+        }
+      }
+    }
+
+    log(
+      `findAniSnatch no result matched mapper malId=${wanted}; `+
+      `falling back to title scoring`
+    );
+  }
+
   let best=null,
     score=-1;
 
@@ -1402,20 +1437,12 @@ async function findAniSnatch(titleData){
       x.title,
       x.name,
       x.al,
-      ...(Array.isArray(x.titles)?
-        x.titles:
-        []),
-      ...(Array.isArray(x.al)?
-        x.al:
-        [])
+      ...(Array.isArray(x.titles)?x.titles:[])
     ]);
 
     const s=Math.max(
       ...names.map(
-        y=>titleScore(
-          titleData.title,
-          y
-        )
+        y=>titleScore(titleData.title,y)
       ),
       0
     );
@@ -1494,19 +1521,14 @@ async function loadServers(aniId,episode,token){
   const out=[];
 
   for(const category of Object.keys(r.server)){
-    const arr=normalizeServerArray(
-      r.server[category]
-    );
+    const arr=normalizeServerArray(r.server[category]);
 
     log(
       `loadSVs category=${category} count=${arr.length}`
     );
 
     for(const x of arr)
-      out.push({
-        ...x,
-        _category:category
-      })
+      out.push({...x,_category:category})
   }
 
   const seen=new Set();
@@ -1564,12 +1586,6 @@ function signAniSnatchUrl(url){
   }
 }
 
-/*
- * CDN proxy map, ported from the original Kotlin extractor's
- * proxyAniSnatchHost(). Any playback URL pointing at a
- * vault-*.uwucdn.top or vibeplayer.site host must be rewritten
- * before the player sees it, otherwise the CDN returns 403.
- */
 const PROXY_MAP={
   "vibeplayer.site":"nanobyte.bigdreamsmalldih.site",
   "vault-01.uwucdn.top":"uwu1.bigdreamsmalldih.site",
@@ -1639,9 +1655,6 @@ function decryptSource(enc){
 }
 
 /*
- * Extract MAL ID / episode / language directly from the
- * AniSnatch server source.
- *
  * Accepts both:
  *   megaplay/51290-sub/42897-5
  *   megaplay/51290-sub/42897-5-1~2~3~4~5-en
@@ -1651,6 +1664,7 @@ function decryptSource(enc){
  *   malId    = 42897
  *   episode  = 5
  *   lang     = en  (defaults to "en" when suffix absent)
+ *   audio    = "sub" | "dub"  (from the source path segment)
  */
 function parseServerSource(source){
   const s=String(source||"").trim();
@@ -1660,46 +1674,17 @@ function parseServerSource(source){
   if(!m)
     return null;
 
+  const audio=/\/dub(?:\/|$)/i.test(s)?"dub":
+              /\/sub(?:\/|$)/i.test(s)?"sub":
+              null;
+
   return{
     provider:String(m[1]).toLowerCase(),
     malId:String(m[2]),
     episode:Number(m[3]),
-    lang:String(m[4]||"en").toLowerCase()
+    lang:String(m[4]||"en").toLowerCase(),
+    audio
   }
-}
-
-function extractUrlsFromHtml(html){
-  const out=[];
-  const h=String(html||"");
-
-  const iframeRe=/<(?:iframe|embed)[^>]+(?:src|data-src)=["']([^"']+)["']/gi;
-  let m;
-
-  while((m=iframeRe.exec(h))){
-    const u=cleanUrl(m[1]);
-    if(/^https?:\/\//i.test(u))
-      out.push(u)
-  }
-
-  const absRe=/https?:\/\/[^"'\\\s<>]+/gi;
-
-  while((m=absRe.exec(h))){
-    const u=cleanUrl(
-      m[0].replace(/[),;]+$/,"")
-    );
-
-    if(/\.(?:css|js|png|jpe?g|gif|svg|woff2?|ico)(?:\?|$)/i.test(u))
-      continue;
-
-    if(
-      /\/stream\//i.test(u)||
-      /getSources/i.test(u)||
-      /\/(?:embed|player|watch)\//i.test(u)
-    )
-      out.push(u)
-  }
-
-  return uniq(out)
 }
 
 function extractPlayableFile(r){
@@ -1821,10 +1806,6 @@ async function resolveSourceResponse(
   ];
 
   for(const ep of endpoints){
-    /*
-     * Do NOT encodeURIComponent the streamId — the server expects
-     * raw slashes in the id query value (verified with curl).
-     */
     const u=host+ep+"?id="+streamId;
 
     log(`extractor ${u}`);
@@ -1871,11 +1852,17 @@ async function resolveSourceResponse(
       host.includes("vidtube")?"VidTube":
       "VidWish";
 
+    const isDub =
+      (server&&server._audio==="dub")||
+      /\/dub(?:\/|$)/i.test(String(server&&server.source||""));
+
+    const typeLabel=isDub?"Dub":"Sub";
+
     const label=String(server.title||"AniSnatch");
 
     return{
-      name:name+" [HSub]",
-      title:label+" [HSub]",
+      name:name+" ["+typeLabel+"]",
+      title:label+" ["+typeLabel+"]",
       url:h.url,
       quality:String(h.max||1080)+"p",
       headers:playbackHeaders,
@@ -1902,31 +1889,53 @@ async function resolveExternal(server){
 
   const parsed=parseServerSource(source);
 
-  const type=/\/dub(?:\/|$)/i.test(source)?"dub":"sub";
+  /*
+   * Reject sources whose embedded MAL ID doesn't match the mapper.
+   * The mapper's mal_id is authoritative; if a source disagrees,
+   * the site has drifted and we must not serve it.
+   */
+  if(
+    STATE.mappedMalId &&
+    parsed &&
+    parsed.malId &&
+    String(parsed.malId) !== String(STATE.mappedMalId)
+  ){
+    log(
+      `skipping source malId=${parsed.malId} `+
+      `!= mapped malId=${STATE.mappedMalId}`
+    );
+    return[]
+  }
+
+  const isDubSource=
+    parsed&&parsed.audio==="dub"||
+    /\/dub(?:\/|$)/i.test(source);
+
+  if(isDubSource&&!STATE.preferDub){
+    log("skipping dub source (prefer sub)");
+    return[]
+  }
+
+  const type=isDubSource?"dub":"sub";
+
+  server._audio=isDubSource?"dub":"sub";
 
   /*
    * ------------------------------------------------------------
    * PATH 1 — DIRECT getSources
    * ------------------------------------------------------------
-   *
-   * The stream ID is the malId/episode/lang triple taken
-   * directly from the AniSnatch source string. No HTML fetch
-   * is required. Matches the URL shape the site itself uses:
-   *
-   *   /stream/getSources?id=42897/5/en
-   *   /stream/getSources?id=42897-5-en
-   *   /stream/getSourcesNew?id=42897/5/en
    */
   if(parsed&&parsed.malId&&parsed.episode){
-    const streamId=
-      parsed.malId+"/"+
-      parsed.episode+"/"+
-      (parsed.lang||"en");
+    const variants=uniq([
+      parsed.malId+"/"+parsed.episode+"/"+type,
+      parsed.malId+"/"+parsed.episode+"/"+(parsed.lang||"en"),
+      parsed.malId+"-"+parsed.episode+"-"+type
+    ]);
 
-    log(`direct streamId=${streamId}`);
+    for(const streamId of variants){
+      log(`direct streamId candidate=${streamId}`);
 
-    const resolved=
-      await resolveSourceResponse(
+      const resolved=await resolveSourceResponse(
         host,
         streamId,
         type,
@@ -1934,78 +1943,13 @@ async function resolveExternal(server){
         server
       );
 
-    if(resolved){
-      log(`direct resolved source=${source}`);
-      return[resolved]
+      if(resolved){
+        log(`direct resolved via ${streamId}`);
+        return[resolved]
+      }
     }
   }
 
-  /*
-   * ------------------------------------------------------------
-   * PATH 2 — ANI-SNATCH VIDEO WRAPPER (fallback)
-   * ------------------------------------------------------------
-   * Kept as a soft fallback in case a future source uses a
-   * different routing scheme. Rarely reached in practice.
-   */
-  const page=pageForSource(source);
-
-  const pageHeaders={
-    "Referer":BASE+"/",
-    "Accept":"*/*"
-  };
-
-  const html=await text(page,{headers:pageHeaders},SOURCE_TIMEOUT);
-
-  if(!html){
-    log(`AniSnatch video page empty source=${source}`);
-    return[]
-  }
-
-  log(`AniSnatch video HTML chars=${html.length} source=${source}`);
-
-  const nestedUrls=extractUrlsFromHtml(html);
-
-  log(`AniSnatch wrapper nested URLs=${nestedUrls.length}`);
-
-  for(const nestedUrl of nestedUrls){
-    const lower=nestedUrl.toLowerCase();
-
-    if(
-      !(
-        lower.includes("megaplay")||
-        lower.includes("vidwish")||
-        lower.includes("vidtube")||
-        lower.includes("/stream/")
-      )
-    )
-      continue;
-
-    const m=/\/stream\/[^/]+\/([^/?#]+)/i.exec(nestedUrl);
-    if(!m)
-      continue;
-
-    const streamPath=String(m[1]).trim();
-
-    const nestedHost=
-      /megaplay/i.test(nestedUrl)?"https://megaplay.buzz":
-      /vidwish/i.test(nestedUrl)?"https://vidwish.live":
-      /vidtube/i.test(nestedUrl)?"https://vidtube.site":
-      host;
-
-    const resolved=
-      await resolveSourceResponse(
-        nestedHost,
-        streamPath,
-        type,
-        nestedUrl,
-        server
-      );
-
-    if(resolved)
-      return[resolved]
-  }
-
-  log(`no playable external source source=${source}`);
   return[]
 }
 
@@ -2029,6 +1973,15 @@ async function getStreams(
     const e=Number(episode)||1;
     const type=String(mediaType||"tv").toLowerCase();
 
+    STATE.preferDub=
+      !!(settings&&(
+        settings.audioType==="dub"||
+        settings.dub===true||
+        settings.audio==="dub"
+      ));
+
+    STATE.mappedMalId=null;
+
     let mapped=await lazyMapping(id,s,e);
     let titleData=mapped;
 
@@ -2038,7 +1991,14 @@ async function getStreams(
         return[]
     }
 
-    const ani=await findAniSnatch(titleData);
+    if(mapped&&mapped.malId)
+      STATE.mappedMalId=String(mapped.malId);
+
+    const ani=await findAniSnatch(
+      titleData,
+      STATE.mappedMalId
+    );
+
     if(!ani)
       return[];
 
