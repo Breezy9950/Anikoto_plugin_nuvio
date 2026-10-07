@@ -67,7 +67,7 @@
       ]
     },
     {
-      "id": "reanime-lazy",
+      "id": "reanime",
       "name": "Reanime",
       "description": "Reanime streams via mapper-first MAL->AniList resolution with native reanime search fallback",
       "version": "1.0.0",
