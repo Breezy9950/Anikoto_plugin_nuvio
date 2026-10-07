@@ -1,29 +1,8 @@
 {
   "name": "AniKoto-Nuvio",
-  "version": "1.4.0",
-  "description": "AniKoto, AnimeOnsen and AniZone providers with database-first unified mapping and original stream extraction",
+  "version": "1.5.0",
+  "description": "AnimeOnsen, AniZone and Reanime providers with database-first unified mapping and original stream extraction",
   "scrapers": [
-    {
-      "id": "anikoto",
-      "name": "AniKoto",
-      "description": "AniKoto multi-server anime streams using database-first unified mapping and original scraping",
-      "version": "1.1.0",
-      "author": "Nuvio Team",
-      "filename": "providers/anikoto.js",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "enabled": true,
-      "formats": [
-        "m3u8"
-      ],
-      "logo": "https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
-    },
     {
       "id": "animeonsen",
       "name": "AnimeOnsen",
@@ -88,21 +67,21 @@
       ]
     },
     {
-      "id": "anisnatch",
-      "name": "AniSnatch",
-      "description": "AniSnatch aggregator with database-first lazy mapping, hard-sub 1080p+ filtering and MegaPlay/VidTube/VidWish resolution",
+      "id": "reanime-lazy",
+      "name": "Reanime",
+      "description": "Reanime streams via mapper-first MAL->AniList resolution with native reanime search fallback",
       "version": "1.0.0",
       "author": "Nuvio Team",
-      "filename": "providers/anisnatch.js",
+      "filename": "providers/reanime-lazy.js",
       "supportedTypes": [
-        "movie",
-        "tv"
+        "tv",
+        "movie"
       ],
       "enabled": true,
       "formats": [
-        "m3u8"
+        "mkv"
       ],
-      "logo": "https://www.google.com/s2/favicons?domain=anisnatch.to&sz=128",
+      "logo": "https://www.google.com/s2/favicons?domain=reanime.to&sz=128",
       "contentLanguage": [
         "en",
         "ja"
