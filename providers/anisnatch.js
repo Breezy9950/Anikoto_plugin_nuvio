@@ -217,13 +217,23 @@ async function findAniSnatch(titleData){
 }
 function normalizeServerArray(v){return Array.isArray(v)?v.filter(x=>x&&typeof x==="object"):[]}
 async function loadServers(aniId,episode,token){
+  log(`loadSVs input aniId=${aniId} episode=${episode} token=${token?"present":"missing"}`);
   const r=await postAjax("loadSVs",{id:Number(aniId)||aniId,ep:Number(episode),token},null);
-  if(!r||r.success!==true||!r.server||typeof r.server!=="object")return[];
+  if(!r){log("loadSVs decoded response is null");return[]}
+  log(`loadSVs response success=${String(r.success)} keys=${Object.keys(r).join(",")}`);
+  if(r.server&&typeof r.server==="object"){
+    const cats=Object.keys(r.server);log(`loadSVs server categories=${cats.join(",")||"(none)"}`);
+    for(const category of cats){const value=r.server[category];
+      if(Array.isArray(value)){log(`loadSVs category=${category} count=${value.length}`);for(let i=0;i<Math.min(value.length,8);i++){const x=value[i]||{};log(`loadSVs server[${category}][${i}] source=${String(x.source||"")} title=${String(x.title||"")} keys=${Object.keys(x).join(",")}`)}}
+      else log(`loadSVs category=${category} type=${typeof value} value=${JSON.stringify(value).slice(0,500)}`)
+    }
+  }else log(`loadSVs server invalid type=${typeof r.server} value=${JSON.stringify(r.server).slice(0,500)}`);
+  if(r.success!==true||!r.server||typeof r.server!=="object"){log("loadSVs rejected: success/server validation failed");return[]}
   const out=[];
-  for(const category of ["HSub","hardsub","hard-sub","hsub"]){
-    const arr=normalizeServerArray(r.server[category]);for(const x of arr)out.push({...x,_category:category})
-  }
-  const seen=new Set();return out.filter(x=>{const k=String(x.source||"")+"|"+String(x.title||"");if(seen.has(k))return false;seen.add(k);return true})
+  for(const category of ["HSub","hardsub","hard-sub","hsub"]){const arr=normalizeServerArray(r.server[category]);log(`loadSVs expected category=${category} count=${arr.length}`);for(const x of arr)out.push({...x,_category:category})}
+  const seen=new Set();const unique=out.filter(x=>{const k=String(x.source||"")+"|"+String(x.title||"");if(seen.has(k))return false;seen.add(k);return true});
+  log(`loadSVs selected hard-sub servers=${unique.length}`);for(let i=0;i<Math.min(unique.length,12);i++){const x=unique[i];log(`selected[${i}] category=${x._category} source=${String(x.source||"")} title=${String(x.title||"")}`)}
+  return unique
 }
 function signAniSnatchUrl(url){
   try{
@@ -270,10 +280,14 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     let servers=await loadServers(ani.aniId,mapped?mapped.malEpisode:e,token);
     if(!servers.length){STATE.snatchToken=null;try{token=await getSnatchToken();servers=await loadServers(ani.aniId,mapped?mapped.malEpisode:e,token)}catch(err){}}
     if(!servers.length)return[];
+    log(`server resolution candidates=${servers.length}`);
     const valid=await allSettledValues(servers.map(srv=>async()=>{
       const context=[srv.title,srv.source,srv._category].join(" ");
-      if(!isHardCategory(srv._category)||isDub(context)||isSoft(context))return[];
-      return await resolveExternal(srv)
+      if(!isHardCategory(srv._category)){log(`server rejected non-hard category=${srv._category} source=${String(srv.source||"")} title=${String(srv.title||"")}`);return[]}
+      if(isDub(context)){log(`server rejected dub source=${String(srv.source||"")} title=${String(srv.title||"")}`);return[]}
+      if(isSoft(context)){log(`server rejected soft-sub source=${String(srv.source||"")} title=${String(srv.title||"")}`);return[]}
+      log(`resolving hard-sub source=${String(srv.source||"")} title=${String(srv.title||"")}`);
+      const resolved=await resolveExternal(srv);log(`resolved source=${String(srv.source||"")} results=${resolved.length}`);return resolved
     }),SOURCE_TIMEOUT);
     const out=[];for(const a of valid)for(const x of a||[])if(x&&x.url&&!isDub(x.title)&&!isSoft(x.title)&&!out.some(y=>y.url===x.url))out.push(x);
     return out
