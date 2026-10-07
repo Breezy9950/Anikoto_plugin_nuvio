@@ -1,12 +1,12 @@
 {
   "name":"AniKoto-Nuvio",
   "version":"1.4.0",
-  "description":"AniKoto, AnimeOnsen and AniZone providers with database-first lazy mapping, Shinkro fallback and original stream extraction",
+  "description":"AniKoto, AnimeOnsen and AniZone providers with database-first unified mapping and original stream extraction",
   "scrapers":[
     {
       "id":"anikoto",
       "name":"AniKoto",
-      "description":"AniKoto multi-server anime streams using database-first lazy mapping, Shinkro fallback and original scraping",
+      "description":"AniKoto multi-server anime streams using database-first unified mapping and original scraping",
       "version":"1.1.0",
       "author":"Nuvio Team",
       "filename":"providers/anikoto.js",
@@ -19,7 +19,7 @@
     {
       "id":"animeonsen",
       "name":"AnimeOnsen",
-      "description":"AnimeOnsen DASH streams using database-first lazy mapping, Shinkro fallback and original scraping",
+      "description":"AnimeOnsen DASH streams using database-first unified mapping and original scraping",
       "version":"1.1.0",
       "author":"Nuvio Team",
       "filename":"providers/animeonsen.js",
@@ -32,7 +32,7 @@
     {
       "id":"anizone",
       "name":"AniZone",
-      "description":"AniZone streams using database-first lazy mapping, Shinkro fallback and original scraping",
+      "description":"AniZone streams using database-first unified mapping and original scraping",
       "version":"1.1.0",
       "author":"Nuvio Team",
       "filename":"providers/anizone.js",
@@ -45,7 +45,7 @@
     {
       "id":"anizone-lazy",
       "name":"AniZone Lazy",
-      "description":"AniZone streams with database-first lazy mapping, Shinkro fallback, lazy population and original scraping",
+      "description":"AniZone streams with database-first unified mapping, lazy population and original scraping",
       "version":"1.1.0",
       "author":"Nuvio Team",
       "filename":"providers/anizone-lazy.js",

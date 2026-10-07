@@ -3,7 +3,7 @@
 
 [[redirects]]
   from = "/api/anime-mapping"
-  to = "/.netlify/functions/anime-mapping"
+  to = "/.netlify/functions/anime-lazy-mapping"
   status = 200
 
 [functions."anime-mapping-updater"]
