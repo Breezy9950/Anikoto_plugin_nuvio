@@ -1707,19 +1707,19 @@ function decryptSource(enc){
  *   language = en
  */
 function parseServerSource(source){
-  const s=String(source||"").trim();
+  const s = String(source || "").trim();
 
-  const m=/^(megaplay|vidwish|vidtube)\/[^/]+\/(\d+)-(\d+)-[^-]*-([a-z]+)$/i.exec(s);
+  const m = /^(megaplay|vidwish|vidtube)\/[^/]+\/(\d+)-(\d+)(?:-[^-]*-([a-z]+))?$/i.exec(s);
 
   if(!m)
     return null;
 
-  return{
-    provider:String(m[1]).toLowerCase(),
-    malId:String(m[2]),
-    episode:Number(m[3]),
-    lang:String(m[4]).toLowerCase()
-  }
+  return {
+    provider: String(m[1]).toLowerCase(),
+    malId: String(m[2]),
+    episode: Number(m[3]),
+    lang: String(m[4] || "en").toLowerCase()
+  };
 }
 
 function directEmbedUrls(server){
@@ -2150,6 +2150,9 @@ async function resolveExternal(server){
       server&&server.source||
       ""
     ).trim();
+
+   console.log("[AniSnatch] raw source =", source);
+  console.log("[AniSnatch] parse =", parseServerSource(source));
 
   const host=
     hostForSource(source);
