@@ -24,12 +24,16 @@ function uniq(a){return[...new Set((a||[]).filter(Boolean).map(String))]}
 function norm(s){return String(s||"").toLowerCase().normalize?String(s||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,""):String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"")}
 function titleScore(a,b){const x=norm(a),y=norm(b);if(!x||!y)return 0;if(x===y)return 100;if(x.includes(y)||y.includes(x))return 80;const A=new Set(x.match(/.{1,4}/g)||[]),B=new Set(y.match(/.{1,4}/g)||[]);let n=0;for(const q of A)if(B.has(q))n++;return Math.round(60*n/Math.max(A.size,B.size))}
 function cleanUrl(u){return String(u||"").replace(/&amp;/g,"&").trim()}
-function explicitQuality(v){const s=String(v||"").toLowerCase();const m=s.match(/(?:2160|1440|1080|720|480|360|240)\s*p?/);return m?parseInt(m[1],10):0}
-function maxHeightFromPlaylist(s){let max=0,m;const re=/#EXT-X-STREAM-INF:([^\r\n]+)/gi;while((m=re.exec(String(s||"")))){const a=m[1],r=/RESOLUTION=\s*\d+\s*x\s*(\d+)/i.exec(a);if(r)max=Math.max(max,Number(r[1]))}return max}
+function isDub(s){return/\b(?:dub|dubbed|dual[\s-]*audio|multi[\s-]*audio|hindi[\s-]*dub|spanish[\s-]*dub|english[\s-]*dub|german[\s-]*dub)\b/i.test(String(s||""))}
+function isSoft(s){return/\bsoft[\s-]*sub(?:bed)?\b|selectable[\s-]+subtitle|subtitle[\s-]+track/i.test(String(s||""))}
+function isHardCategory(s){return/^(?:hardsub|hard-sub|hsub|h[\s-]?sub)$/i.test(String(s||"").trim())}
+function explicitQuality(v){const s=String(v||"").toLowerCase(),m=s.match(/(?:2160|1440|1080|720|480|360|240)\s*p?/);return m?parseInt(m[1],10):0}
+function maxHeightFromPlaylist(s){let max=0,m;const re=/#EXT-X-STREAM-INF:([^\r\n]+)/gi;while((m=re.exec(String(s||"")))){const r=/RESOLUTION=\s*\d+\s*x\s*(\d+)/i.exec(m[1]);if(r)max=Math.max(max,Number(r[1]))}return max}
 async function inspectHls(url,headers,meta={}){
   const h=await text(url,{headers},HLS_TIMEOUT);if(!h)return null;
-  const max=maxHeightFromPlaylist(h);if(max>=1080)return{url,max,master:true};
+  const max=maxHeightFromPlaylist(h);
   const explicit=Math.max(explicitQuality(meta.quality),explicitQuality(meta.resolution),explicitQuality(meta.height),explicitQuality(meta.label),explicitQuality(meta.title));
+  if(max>=1080)return{url,max,master:true};
   if(max===0&&explicit>=1080)return{url,max:explicit,master:false};
   return null
 }
@@ -44,15 +48,14 @@ function pageForSource(source){const proxy=STATE.proxyParam||PROXY_PARAM;return 
 function b64std(a){const abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",u=a instanceof Uint8Array?a:new Uint8Array(a),o=[];for(let i=0;i<u.length;i+=3){const x=u[i],y=i+1<u.length?u[i+1]:0,z=i+2<u.length?u[i+2]:0;o.push(abc[x>>2],abc[((x&3)<<4)|(y>>4)],i+1<u.length?abc[((y&15)<<2)|(z>>6)]:"=",i+2<u.length?abc[z&63]:"=")}return o.join("")}
 function hexEncode(s){let o="";for(let i=0;i<s.length;i++)o+=s.charCodeAt(i).toString(16).padStart(2,"0");return o}
 function shiftCipher(data,mode,shifts,key){
-  if(!key)return data;
-  const len=key.length;let s=String(data);
+  if(!key)return data;const len=key.length;let s=String(data);
   for(let n=0;n<shifts;n++){let out="";for(let i=0;i<s.length;i++){const c=s.charAt(i),pos=key.indexOf(c);if(pos<0)out+=c;else{const w=((mode==="enc"?pos+5:pos-5+len)%len);out+=key.charAt(w)}}s=out.split("").reverse().join("")}return s
 }
 function chunk25(s){const out=[];for(let i=0;i<String(s).length;i+=25)out.push(String(s).slice(i,i+25));return out}
 function shufflePairs(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1)),t=a[i];a[i]=a[j];a[j]=t}return a}
-function encryptData(data,key){const b=utf8enc(String(data)),hex=hexEncode(b64std(b)),n1=Math.floor(Math.random()*10)+1,s1=shiftCipher(hex,"enc",n1,key)+"strSMCconvert"+n1,n2=Math.floor(Math.random()*10)+1;return shiftCipher(s1,"enc",n2,key)}
+function encryptData(data,key){const b=utf8enc(String(data)),hex=hexEncode(b64std(b));const n1=Math.floor(Math.random()*10)+1,s1=shiftCipher(hex,"enc",n1,key)+"strSMCconvert"+n1,n2=Math.floor(Math.random()*10)+1;return shiftCipher(s1,"enc",n2,key)}
 function b64dec(s){s=String(s||"").replace(/-/g,"+").replace(/_/g,"/");s+=Array((4-s.length%4)%4+1).join("=");const abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",o=[];let bits=0,v=0;for(let i=0;i<s.length;i++){const c=s.charAt(i);if(c==="=")break;const n=abc.indexOf(c);if(n<0)continue;v=(v<<6)|n;bits+=6;if(bits>=8){bits-=8;o.push((v>>bits)&255)}}return new Uint8Array(o)}
-function utf8(a){let s="";for(let i=0;i<a.length;){const c=a[i++];if(c<128)s+=String.fromCharCode(c);else if(c<224)s+=String.fromCharCode(((c&31)<<6)|(a[i++]&63));else if(c<240)s+=String.fromCharCode(((c&15)<<12)|((a[i++]&63)<<6)|(a[i++]&63));else{const cp=((c&7)<<18)|((a[i++]&63)<<12)|((a[i++]&63)<<6)|(a[i++]&63),z=cp-65536;s+=String.fromCharCode(55296+(z>>10),56320+(z&1023))}}return s}
+function utf8(a){let s="";for(let i=0;i<a.length;){const c=a[i++];if(c<128)s+=String.fromCharCode(c);else if(c<224)s+=String.fromCharCode(((c&31)<<6)|(a[i++]&63));else if(c<240)s+=String.fromCharCode(((c&15)<<12)|((a[i++]&63)<<6)|(a[i++]&63));else{const cp=((c&7)<<18)|((a[i++]&63)<<12)|((a[i++]&63)<<6)|(a[i++]&63);const z=cp-65536;s+=String.fromCharCode(55296+(z>>10),56320+(z&1023))}}return s}
 function b64url(a){const abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",u=a instanceof Uint8Array?a:new Uint8Array(a),o=[];for(let i=0;i<u.length;i+=3){const x=u[i],y=i+1<u.length?u[i+1]:0,z=i+2<u.length?u[i+2]:0;o.push(abc[x>>2],abc[((x&3)<<4)|(y>>4)],i+1<u.length?abc[((y&15)<<2)|(z>>6)]:"=",i+2<u.length?abc[z&63]:"=")}return o.join("").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
 
 const AES_SBOX=[99,124,119,123,242,107,111,197,48,1,103,43,254,215,171,118,202,130,201,125,250,89,71,240,173,212,162,175,156,164,114,192,183,253,147,38,54,63,247,204,52,165,229,241,113,216,49,21,4,199,35,195,24,150,5,154,7,18,128,226,235,39,178,117,9,131,44,26,27,110,90,160,82,59,214,179,41,227,47,132,83,209,0,237,32,252,177,91,106,203,190,57,74,76,88,207,208,239,170,251,67,77,51,133,69,249,2,127,80,60,159,168,81,163,64,143,146,157,56,245,188,182,218,33,16,255,243,210,205,12,19,236,95,151,68,23,196,167,126,61,100,93,25,115,96,129,79,220,34,42,144,136,70,238,184,20,222,94,11,219,224,50,58,10,73,6,36,92,194,211,172,98,145,149,228,121,231,200,55,109,141,213,78,169,108,86,244,234,101,122,174,8,186,120,37,46,28,166,180,198,232,221,116,31,75,189,139,138,112,62,181,102,72,3,246,14,97,53,87,185,134,193,29,158,225,248,152,17,105,217,142,148,155,30,135,233,206,85,40,223,140,161,137,13,191,230,66,104,65,153,45,15,176,84,187,22];
@@ -68,9 +71,9 @@ function aesDecBlock(block,key){const s=new Uint8Array(block),k=aesKey(key),nr=k
 function aesCbcDec(data,key,iv){if(data.length%16)throw new Error("Invalid AES ciphertext");const o=new Uint8Array(data.length);let prev=iv.slice();for(let p=0;p<data.length;p+=16){const b=aesDecBlock(data.slice(p,p+16),key);for(let i=0;i<16;i++)o[p+i]=b[i]^prev[i];prev=data.slice(p,p+16)}const pad=o[o.length-1];if(!pad||pad>16)throw new Error("Invalid PKCS7 padding");for(let i=o.length-pad;i<o.length;i++)if(o[i]!==pad)throw new Error("Invalid PKCS7 padding");return o.slice(0,o.length-pad)}
 
 function utf8enc(s){const e=encodeURIComponent(String(s)),a=[];for(let i=0;i<e.length;){if(e[i]==="%"){a.push(parseInt(e.slice(i+1,i+3),16));i+=3}else a.push(e.charCodeAt(i++))}return new Uint8Array(a)}
-const SHA_K=[1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162078206,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996661996,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1537002063,1920995346,2024104815,2222079433,2430449436,2554220882,2730485921,2820302411,2952996808,3210313671];
-const SHA_H=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225];
-function sha256(m){const a=m instanceof Uint8Array?m:utf8enc(m),l=a.length,n=(((l+9+63)>>6)<<6),b=new Uint8Array(n);b.set(a);b[l]=128;const bits=l*8;for(let i=0;i<8;i++)b[n-1-i]=(bits/(2**(8*i)))&255;let h=SHA_H.slice();const w=new Uint32Array(64);for(let p=0;p<n;p+=64){for(let i=0;i<16;i++)w[i]=(b[p+4*i]<<24)|(b[p+4*i+1]<<16)|(b[p+4*i+2]<<8)|b[p+4*i+3];for(let i=16;i<64;i++){const x=w[i-15],y=w[i-2],s0=((x>>>7)|(x<<25))^((x>>>18)|(x<<14))^(x>>>3),s1=((y>>>17)|(y<<15))^((y>>>19)|(y<<13))^(y>>>10);w[i]=(w[i-16]+s0+w[i-7]+s1)>>>0}let[a0,a1,a2,a3,a4,a5,a6,a7]=h;for(let i=0;i<64;i++){const S1=((a4>>>6)|(a4<<26))^((a4>>>11)|(a4<<21))^((a4>>>25)|(a4<<7)),ch=(a4&a5)^(~a4&a6),t1=(a7+S1+ch+SHA_K[i]+w[i])>>>0,S0=((a0>>>2)|(a0<<30))^((a0>>>13)|(a0<<19))^((a0>>>22)|(a0<<10)),maj=(a0&a1)^(a0&a2)^(a1&a2),t2=(S0+maj)>>>0;a7=a6;a6=a5;a5=a4;a4=(a3+t1)>>>0;a3=a2;a2=a1;a1=a0;a0=(t1+t2)>>>0}h[0]=(h[0]+a0)>>>0;h[1]=(h[1]+a1)>>>0;h[2]=(h[2]+a2)>>>0;h[3]=(h[3]+a3)>>>0;h[4]=(h[4]+a4)>>>0;h[5]=(h[5]+a5)>>>0;h[6]=(h[6]+a6)>>>0;h[7]=(h[7]+a7)>>>0}const o=new Uint8Array(32);for(let i=0;i<8;i++){o[4*i]=h[i]>>>24;o[4*i+1]=h[i]>>>16;o[4*i+2]=h[i]>>>8;o[4*i+3]=h[i]}return o}
+const SHA_K=[1116352408,1899447441,3049323471,3921009573,961987163,1508970993,2453635748,1426881987,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,338241895,666307205,773529912,1294757372,1396182291,1695183700,2177026350,2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1996064986,2024104815,2227730452,2361852424,2428436474,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873779,1996064986,2024104815,2227730452,2361852424,2428436474,275423344,430227734];
+const SHA_H=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459224];
+function sha256(m){const a=m instanceof Uint8Array?m:utf8enc(m),l=a.length,n=(((l+9+63)>>6)<<6),b=new Uint8Array(n);b.set(a);b[l]=128;const bits=l*8;for(let i=0;i<8;i++)b[n-1-i]=(bits/(2**(8*i)))&255;let h=SHA_H.slice(),w=new Uint32Array(64);for(let p=0;p<n;p+=64){for(let i=0;i<16;i++)w[i]=(b[p+4*i]<<24)|(b[p+4*i+1]<<16)|(b[p+4*i+2]<<8)|b[p+4*i+3];for(let i=16;i<64;i++){const x=w[i-15],y=w[i-2],s0=((x>>>7)|(x<<25))^((x>>>18)|(x<<14))^(x>>>3),s1=((y>>>17)|(y<<15))^((y>>>19)|(y<<13))^(y>>>10);w[i]=(w[i-16]+s0+w[i-7]+s1)>>>0}let[a0,a1,a2,a3,a4,a5,a6,a7]=h;for(let i=0;i<64;i++){const S1=((a4>>>6)|(a4<<26))^((a4>>>11)|(a4<<21))^((a4>>>25)|(a4<<7)),ch=(a4&a5)^(~a4&a6),t1=(a7+S1+ch+SHA_K[i]+w[i])>>>0,S0=((a0>>>2)|(a0<<30))^((a0>>>13)|(a0<<19))^((a0>>>22)|(a0<<10)),maj=(a0&a1)^(a0&a2)^(a1&a2),t2=(S0+maj)>>>0;a7=a6;a6=a5;a5=a4;a4=(a3+t1)>>>0;a3=a2;a2=a1;a1=a0;a0=(t1+t2)>>>0}h[0]=(h[0]+a0)>>>0;h[1]=(h[1]+a1)>>>0;h[2]=(h[2]+a2)>>>0;h[3]=(h[3]+a3)>>>0;h[4]=(h[4]+a4)>>>0;h[5]=(h[5]+a5)>>>0;h[6]=(h[6]+a6)>>>0;h[7]=(h[7]+a7)>>>0}const o=new Uint8Array(32);for(let i=0;i<8;i++){o[4*i]=h[i]>>>24;o[4*i+1]=h[i]>>>16;o[4*i+2]=h[i]>>>8;o[4*i+3]=h[i]}return o}
 function hmac256(key,msg){let k=utf8enc(key),m=msg instanceof Uint8Array?msg:utf8enc(msg);if(k.length>64)k=sha256(k);const p=new Uint8Array(64),q=new Uint8Array(64);p.fill(54);q.fill(92);for(let i=0;i<k.length;i++){p[i]^=k[i];q[i]^=k[i]}const z=new Uint8Array(p.length+m.length);z.set(p);z.set(m,p.length);const ih=sha256(z),z2=new Uint8Array(q.length+ih.length);z2.set(q);z2.set(ih,q.length);return sha256(z2)}
 
 function _gzipInflate(bytes){
@@ -82,8 +85,7 @@ function _gzipInflate(bytes){
   if(fl&16){while(p<a.length&&a[p++]){}}
   if(fl&2)p+=2;
   if(p>=a.length-8)throw new Error("Bad gzip body");
-  const end=a.length-8,src=a.slice(p,end);
-  let bit=0,idx=0,out=[];
+  const end=a.length-8,src=a.slice(p,end);let bit=0,idx=0,out=[];
   function rb(n){let v=0,s=0;while(s<n){if(idx>=src.length)throw new Error("Deflate EOF");const avail=8-bit,take=Math.min(n-s,avail),mask=(1<<take)-1;v|=((src[idx]>>bit)&mask)<<s;bit+=take;s+=take;if(bit===8){bit=0;idx++}}return v}
   function align(){if(bit){bit=0;idx++}}
   function rev(x,n){let r=0;for(let i=0;i<n;i++){r=(r<<1)|(x&1);x>>>=1}return r}
@@ -98,12 +100,7 @@ function _gzipInflate(bytes){
   const corder=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
   function dynamic(){const hl=rb(5)+257,hd=rb(5)+1,hc=rb(4)+4,cl=new Uint8Array(19);for(let i=0;i<hc;i++)cl[corder[i]]=rb(3);const ct=tree(cl),lens=[];while(lens.length<hl+hd){const s=sym(ct);if(s<16)lens.push(s);else if(s===16){if(!lens.length)throw new Error("Bad repeat");const n=rb(2)+3,v=lens[lens.length-1];for(let i=0;i<n;i++)lens.push(v)}else if(s===17){const n=rb(3)+3;for(let i=0;i<n;i++)lens.push(0)}else if(s===18){const n=rb(7)+11;for(let i=0;i<n;i++)lens.push(0)}else throw new Error("Bad code length")}return[tree(lens.slice(0,hl)),tree(lens.slice(hl,hl+hd))]}
   let last=0;
-  while(!last){
-    last=rb(1);const type=rb(2);
-    if(type===0){align();const n=rb(16),nn=rb(16);if(((n^0xffff)&0xffff)!==nn)throw new Error("Bad stored block");for(let i=0;i<n;i++)out.push(rb(8));continue}
-    let lt,dt;if(type===1){lt=fixedLL;dt=fixedD}else if(type===2)[lt,dt]=dynamic();else throw new Error("Reserved deflate block");
-    for(;;){const s=sym(lt);if(s<256){out.push(s);continue}if(s===256)break;if(s>285)throw new Error("Bad length");const li=s-257,n=lbase[li]+(lext[li]?rb(lext[li]):0),ds=sym(dt);if(ds>29)throw new Error("Bad distance");const dist=dbase[ds]+(dext[ds]?rb(dext[ds]):0),start=out.length-dist;if(start<0)throw new Error("Bad distance range");for(let i=0;i<n;i++)out.push(out[start+i])}
-  }
+  while(!last){last=rb(1);const type=rb(2);if(type===0){align();const n=rb(16),nn=rb(16);if(((n^0xffff)&0xffff)!==nn)throw new Error("Bad stored block");for(let i=0;i<n;i++)out.push(rb(8));continue}let lt,dt;if(type===1){lt=fixedLL;dt=fixedD}else if(type===2)[lt,dt]=dynamic();else throw new Error("Reserved deflate block");for(;;){const s=sym(lt);if(s<256){out.push(s);continue}if(s===256)break;if(s>285)throw new Error("Bad length");const li=s-257,n=lbase[li]+(lext[li]?rb(lext[li]):0),ds=sym(dt);if(ds>29)throw new Error("Bad distance");const dist=dbase[ds]+(dext[ds]?rb(dext[ds]):0),start=out.length-dist;if(start<0)throw new Error("Bad distance range");for(let i=0;i<n;i++)out.push(out[start+i])}}
   return new Uint8Array(out)
 }
 
@@ -115,9 +112,7 @@ function makePayload(dataObj,key){
   let auth=0;for(let i=0;i<token.length;i++)auth+=token.charCodeAt(i);
   return[{data,key:ids,token,authenticator:String(auth)},String(auth)]
 }
-
 const STATE={key:null,mark:null,timeOffset:0,snatchToken:null,proxyParam:null,initPromise:null};
-
 async function initCrypto(){
   if(STATE.key&&STATE.mark)return;
   if(STATE.initPromise)return STATE.initPromise;
@@ -128,25 +123,24 @@ async function initCrypto(){
     if(!cm||!tm||!vm||!mm)throw new Error("AniSnatch crypto bootstrap incomplete");
     const fullKey=utf8enc(mm[1]+vm[1]+tm[1]),raw=b64dec(cm[1]),x=new Uint8Array(raw.length);
     for(let i=0;i<raw.length;i++)x[i]=raw[i]^fullKey[i%fullKey.length];
-    const cfg=JSON.parse(utf8(x));STATE.key=String(cfg.key||"");STATE.mark=cfg.mark?Uint8Array.from(cfg.mark.map(Number)):null;STATE.timeOffset=Number(tm[1])-Math.floor(Date.now()/1000);STATE.proxyParam=cfg.proxys&&typeof cfg.proxys==="object"?Object.keys(cfg.proxys).join("~"):"";
+    const cfg=JSON.parse(utf8(x));STATE.key=String(cfg.key||"");STATE.mark=cfg.mark?Uint8Array.from(cfg.mark.map(Number)):null;
+    STATE.timeOffset=Number(tm[1])-Math.floor(Date.now()/1000);
+    STATE.proxyParam=cfg.proxys&&typeof cfg.proxys==="object"?Object.keys(cfg.proxys).join("~"):"";
     if(!STATE.key||!STATE.mark||!STATE.mark.length)throw new Error("AniSnatch crypto config invalid");
   })().finally(()=>{STATE.initPromise=null});return STATE.initPromise
 }
-
 async function responseBytes(r){
   if(r&&typeof r.arrayBuffer==="function"){try{return new Uint8Array(await r.arrayBuffer())}catch(e){log("arrayBuffer failed: "+(e&&e.message||e))}}
   if(r&&typeof r.bytes==="function"){try{const b=await r.bytes();return b instanceof Uint8Array?b:new Uint8Array(b)}catch(e){log("bytes failed: "+(e&&e.message||e))}}
   if(r&&typeof r.blob==="function"){try{const b=await r.blob();if(b&&typeof b.arrayBuffer==="function")return new Uint8Array(await b.arrayBuffer())}catch(e){log("blob failed: "+(e&&e.message||e))}}
   throw new Error("Nuvio response has no binary reader")
 }
-
 async function postAjax(endpoint,dataObj,referer){
   await initCrypto();
   const[payload,authenticator]=makePayload(dataObj,STATE.key);
   const url=BASE+"/api/"+endpoint+"/"+Math.floor(Date.now()/1000+STATE.timeOffset);
   const headers={"User-Agent":UA,"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest","Referer":referer||BASE+"/home"};
-  log(`POST ${url}`);
-  const r=await req(url,{method:"POST",headers,body:JSON.stringify(payload)},TIMEOUT);
+  log(`POST ${url}`);const r=await req(url,{method:"POST",headers,body:JSON.stringify(payload)},TIMEOUT);
   if(!r||!r.ok)throw new Error(`AniSnatch API HTTP ${r?r.status:"NO_RESPONSE"}`);
   const resp=await responseBytes(r),mark=STATE.mark;log("API response bytes="+resp.length);let pos=-1;
   outer:for(let i=0;i<=resp.length-mark.length;i++){for(let j=0;j<mark.length;j++)if(resp[i+j]!==mark[j])continue outer;pos=i+mark.length;break}
@@ -155,26 +149,19 @@ async function postAjax(endpoint,dataObj,referer){
   for(let i=0;i<enc.length;i++)xored[i]=enc[i]^auth[i%auth.length];
   const plain=_gzipInflate(xored),parsed=JSON.parse(utf8(plain));log("API decoded "+endpoint+" keys="+Object.keys(parsed||{}).join(","));return parsed
 }
-
 async function getSnatchToken(){
   if(STATE.snatchToken)return STATE.snatchToken;
-  const r=await postAjax("init",{token:null},null);
-  if(!r||r.success!==true||!(r.id||r.token))throw new Error("AniSnatch token unavailable");
-  STATE.snatchToken=String(r.id||r.token);
-  if(r.proxys&&typeof r.proxys==="object")STATE.proxyParam=Object.keys(r.proxys).join("~");
-  return STATE.snatchToken
+  const r=await postAjax("init",{token:null},null);if(!r||r.success!==true||!(r.id||r.token))throw new Error("AniSnatch token unavailable");
+  STATE.snatchToken=String(r.id||r.token);if(r.proxys&&typeof r.proxys==="object")STATE.proxyParam=Object.keys(r.proxys).join("~");return STATE.snatchToken
 }
-
 async function lazyMapping(tmdbId,season,episode){
   try{
     const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&tmdb_id="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode)+"&pending=1";
-    const d=await json(u,{},7000);if(!d||!d.mapping)return null;
-    const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);
+    const d=await json(u,{},7000);if(!d||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);
     if(!mal||!Number.isInteger(ep)||ep<1)return null;
     return{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],source:d.source||"lazy"}
   }catch(e){return null}
 }
-
 async function tmdbTitle(id,type){
   try{
     const p=String(type).toLowerCase()==="movie"?"movie":"tv",d=await json("https://api.themoviedb.org/3/"+p+"/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_KEY),{},3500);
@@ -182,14 +169,12 @@ async function tmdbTitle(id,type){
     return{title:String(d.name||d.title||"").trim(),titles:uniq([d.original_name,d.original_title])}
   }catch(e){return null}
 }
-
 async function findAniSnatch(titleData){
   const qs=uniq([titleData&&titleData.title,...(titleData&&titleData.titles||[])]).filter(Boolean).slice(0,5);
   if(!qs.length)return null;
   const results=await allSettledValues(qs.map(q=>async()=>{
     try{
-      const r=await postAjax("quickSearch",{keyword:q},null);
-      const a=r&&r.data&&Array.isArray(r.data.anime)?r.data.anime:Array.isArray(r&&r.anime)?r.anime:Array.isArray(r&&r.data)?r.data:[];
+      const r=await postAjax("quickSearch",{keyword:q},null),a=r&&r.data&&Array.isArray(r.data.anime)?r.data.anime:Array.isArray(r&&r.anime)?r.anime:Array.isArray(r&&r.data)?r.data:[];
       return a.filter(x=>x&&typeof x==="object")
     }catch(e){log(`quickSearch failed: ${e&&e.message||e}`);return[]}
   }),5000);
@@ -201,13 +186,10 @@ async function findAniSnatch(titleData){
     const s=Math.max(...names.map(y=>titleScore(titleData.title,y)),0);
     if(s>score){score=s;best=x}
   }
-  const aniId=best&&best.id!=null?best.id:(best&&best.al!=null?best.al:null);
-  if(aniId==null)return null;
+  const aniId=best&&best.id!=null?best.id:(best&&best.al!=null?best.al:null);if(aniId==null)return null;
   return{aniId:String(aniId),title:String(best.title_en||best.title||best.name||titleData.title),score}
 }
-
 function normalizeServerArray(v){return Array.isArray(v)?v.filter(x=>x&&typeof x==="object"):[]}
-
 async function loadServers(aniId,episode,token){
   log(`loadSVs input aniId=${aniId} episode=${episode} token=${token?"present":"missing"}`);
   const r=await postAjax("loadSVs",{id:Number(aniId)||aniId,ep:Number(episode),token},null);
@@ -219,10 +201,7 @@ async function loadServers(aniId,episode,token){
       const value=r.server[category];
       if(Array.isArray(value)){
         log(`loadSVs category=${category} count=${value.length}`);
-        for(let i=0;i<Math.min(value.length,8);i++){
-          const x=value[i]||{};
-          log(`loadSVs server[${category}][${i}] source=${String(x.source||"")} title=${String(x.title||"")} keys=${Object.keys(x).join(",")}`)
-        }
+        for(let i=0;i<Math.min(value.length,8);i++){const x=value[i]||{};log(`loadSVs server[${category}][${i}] source=${String(x.source||"")} title=${String(x.title||"")} keys=${Object.keys(x).join(",")}`)}
       }else log(`loadSVs category=${category} type=${typeof value} value=${JSON.stringify(value).slice(0,500)}`)
     }
   }else log(`loadSVs server invalid type=${typeof r.server} value=${JSON.stringify(r.server).slice(0,500)}`);
@@ -233,21 +212,14 @@ async function loadServers(aniId,episode,token){
     log(`loadSVs category=${category} count=${arr.length}`);
     for(const x of arr)out.push({...x,_category:category})
   }
-  const seen=new Set();
-  const unique=out.filter(x=>{
+  const seen=new Set(),unique=out.filter(x=>{
     const k=String(x.source||"")+"|"+String(x.title||"")+"|"+String(x._category||"");
-    if(seen.has(k))return false;
-    seen.add(k);
-    return true
+    if(seen.has(k))return false;seen.add(k);return true
   });
   log(`loadSVs selected servers=${unique.length}`);
-  for(let i=0;i<Math.min(unique.length,20);i++){
-    const x=unique[i];
-    log(`selected[${i}] category=${x._category} source=${String(x.source||"")} title=${String(x.title||"")}`)
-  }
+  for(let i=0;i<Math.min(unique.length,20);i++){const x=unique[i];log(`selected[${i}] category=${x._category} source=${String(x.source||"")} title=${String(x.title||"")}`)}
   return unique
 }
-
 function signAniSnatchUrl(url){
   try{
     if(/token=/i.test(url))return url;
@@ -256,7 +228,6 @@ function signAniSnatchUrl(url){
     return url+(url.includes("?")?"&":"?")+"token="+b64url(utf8enc(payload))+"."+b64url(sig)
   }catch(e){return url}
 }
-
 function decryptSource(enc){
   try{
     const key=new Uint8Array(32);key.set(utf8enc("i?LMTAx0Q6,:}50U"));
@@ -264,105 +235,52 @@ function decryptSource(enc){
     return o&&typeof o.file==="string"?o.file:null
   }catch(e){return null}
 }
-
 async function resolveExternal(server){
-  const source=String(server.source||"").trim(),host=hostForSource(source);
-  if(!host)return[];
-  const page=pageForSource(source);
-  const type=/\/dub(?:\b|\/|-)/i.test(source)||/-dub(?:\b|\/|-)/i.test(source)?"dub":"sub";
-  const pageHeaders={"Referer":BASE+"/","Accept":"*/*"};
-  const ajaxHeaders={"User-Agent":UA,"Accept":"*/*","X-Requested-With":"XMLHttpRequest","Origin":host,"Referer":page};
-  const playbackHeaders={"User-Agent":UA,"Referer":host+"/"};
-  log(`extract page=${page} host=${host} type=${type}`);
-  const html=await text(page,{headers:pageHeaders},SOURCE_TIMEOUT);
-  if(!html){log(`extract page failed source=${source}`);return[]}
-  log(`extract page bodyChars=${html.length}`);
-
+  const source=String(server.source||"").trim(),host=hostForSource(source);if(!host)return[];
+  const page=pageForSource(source),type=/\/dub(?:\/|$)/i.test(page)?"dub":"sub";
+  const pageHeaders={"Referer":BASE+"/","Accept":"*/*"},ajaxHeaders={"User-Agent":UA,"Accept":"*/*","X-Requested-With":"XMLHttpRequest","Origin":host,"Referer":page},playbackHeaders={"User-Agent":UA,"Referer":host+"/"};
+  const html=await text(page,{headers:pageHeaders},SOURCE_TIMEOUT);if(!html)return[];
   let streamId=null,m;
-  const patterns=[
-    /<[^>]*id=["']megaplay-player["'][^>]*data-id=["']([^"']+)["'][^>]*>/i,
-    /<[^>]*data-id=["']([^"']+)["'][^>]*id=["']megaplay-player["'][^>]*>/i,
-    /id=["']megaplay-player["'][^>]*[\s\S]{0,600}?data-id=["']([^"']+)["']/i,
-    /data-id=["']([^"']+)["'][^>]*[\s\S]{0,600}?id=["']megaplay-player["']/i
-  ];
-
-  for(const re of patterns){
-    m=re.exec(html);
-    if(m&&String(m[1]).trim()){streamId=String(m[1]).trim();break}
-  }
-
+  m=/id=["']megaplay-player["'][^>]*data-id=["']([^"']+)["']/i.exec(html);
+  if(!m)m=/data-id=["']([^"']+)["'][^>]*id=["']megaplay-player["']/i.exec(html);
+  if(!m)m=/data-id=["']([^"']+)["']/i.exec(html);
+  if(!m)m=/data-realid=["']([^"']+)["']/i.exec(html);
+  if(m)streamId=String(m[1]).trim();
   if(!streamId){
-    m=/data-id=["'](\d+)["']/i.exec(html);
+    m=/\/stream\/s-\d+\/([^/?#"']+)/i.exec(html);
     if(m)streamId=m[1]
   }
-
-  if(!streamId){
-    m=/data-realid=["'](\d+)["']/i.exec(html);
-    if(m)streamId=m[1]
-  }
-
-  if(!streamId){
-    m=/\/stream\/s-\d+\/(\d+)/i.exec(html);
-    if(m)streamId=m[1]
-  }
-
-  if(!streamId){
-    m=/\/stream\/s-\d+\/(\d+)/i.exec(page);
-    if(m)streamId=m[1]
-  }
-
-  if(!streamId){log(`extract streamId missing source=${source}`);return[]}
-  log(`extract streamId=${streamId}`);
-
+  if(!streamId){log(`no streamId source=${source}`);return[]}
+  log(`streamId=${streamId} type=${type} host=${host}`);
   const endpoints=host.includes("megaplay.buzz")?["/stream/getSourcesNew","/stream/getSources"]:["/stream/getSources","/stream/getSourcesNew"];
-
   for(const ep of endpoints){
-    const endpointUrl=host+ep+"?id="+encodeURIComponent(streamId)+"&type="+encodeURIComponent(type);
-    log(`GET ${endpointUrl}`);
-    const r=await json(endpointUrl,{headers:ajaxHeaders},SOURCE_TIMEOUT);
-    if(!r){log(`source response empty endpoint=${ep}`);continue}
-    log(`source response keys=${Object.keys(r||{}).join(",")}`);
-
+    const u=host+ep+"?id="+encodeURIComponent(streamId)+"&type="+encodeURIComponent(type);
+    log("extractor "+u);
+    const r=await json(u,{headers:ajaxHeaders},SOURCE_TIMEOUT);if(!r){log("extractor empty");continue}
     let file=null;
-    const el=r.sources;
-
-    if(el&&typeof el==="object"&&!Array.isArray(el))file=el.file||el.url||el.src;
-    else if(Array.isArray(el)&&el.length&&el[0]&&typeof el[0]==="object")file=el[0].file||el[0].url||el[0].src;
+    if(r.sources&&typeof r.sources==="object"&&!Array.isArray(r.sources))file=r.sources.file||r.sources.url||r.sources.src;
+    else if(Array.isArray(r.sources)&&r.sources[0])file=r.sources[0].file||r.sources[0].url||r.sources[0].src;
     if(!file&&r.file)file=r.file;
     if(!file&&r.url)file=r.url;
+    if(!file&&r.src)file=r.src;
     if(!file&&r.enc)file=decryptSource(r.enc);
-
     file=cleanUrl(file);
-    if(!file||!/^https?:\/\//i.test(file)){log(`no playable file endpoint=${ep}`);continue}
-
+    if(!file||!/^https?:\/\//i.test(file)){log("extractor returned no playable URL");continue}
+    log("extractor URL obtained");
     const signed=signAniSnatchUrl(file),qualityMeta={...server,...r},h=await inspectHls(signed,playbackHeaders,qualityMeta);
-    const label=String(server.title||"AniSnatch"),name=String(host).includes("megaplay")?"MegaPlay":String(host).includes("vidtube")?"VidTube":"VidWish";
-    const subtitles=[];
-    const tracks=Array.isArray(r.tracks)?r.tracks:[];
-
+    if(!h){log("HLS rejected/no 1080");continue}
+    const subtitles=[],tracks=Array.isArray(r.tracks)?r.tracks:[];
     for(const t of tracks){
       if(!t||!/^(captions|subtitles)$/i.test(String(t.kind||"")))continue;
-      const u=cleanUrl(t.file||t.url);
-      if(!/^https?:\/\//i.test(u))continue;
+      const u=cleanUrl(t.file);if(!/^https?:\/\//i.test(u))continue;
       subtitles.push({url:u,name:String(t.label||"English"),language:"en",format:String(t.format||"vtt").replace(/^\./,"")||"vtt",default:true,headers:playbackHeaders})
     }
-
-    if(h){
-      log(`playable HLS source=${name} quality=${h.max}p`);
-      return[{name,title:label+" ["+type.toUpperCase()+"]",url:h.url,quality:String(h.max)+"p",headers:playbackHeaders,subtitle:subtitles[0]?subtitles[0].url:"",subtitleFormat:subtitles[0]?subtitles[0].format:"",subtitles,backup:false,_source:name}]
-    }
-
-    const explicit=Math.max(explicitQuality(server.quality),explicitQuality(server.resolution),explicitQuality(server.height),explicitQuality(server.label),explicitQuality(server.title),explicitQuality(r.quality),explicitQuality(r.resolution),explicitQuality(r.height),explicitQuality(r.label));
-    log(`playable direct M3U8 source=${name} quality=${explicit||0}`);
-    return[{name,title:label+" ["+type.toUpperCase()+"]",url:signed,quality:explicit?String(explicit)+"p":"Auto",headers:playbackHeaders,subtitle:subtitles[0]?subtitles[0].url:"",subtitleFormat:subtitles[0]?subtitles[0].format:"",subtitles,backup:false,_source:name}]
+    const label=String(server.title||"AniSnatch"),name=host.includes("megaplay")?"MegaPlay":host.includes("vidtube")?"VidTube":"VidWish";
+    return[{name:name+" [HSub]",title:label+" [HSub]",url:h.url,quality:String(h.max)+"p",headers:playbackHeaders,subtitle:subtitles[0]?subtitles[0].url:"",subtitleFormat:subtitles[0]?subtitles[0].format:"",subtitles,backup:false,_source:name}]
   }
-
-  log(`all source endpoints failed source=${source}`);
   return[]
 }
-
 async function fallbackTitle(tmdbId,type){return await tmdbTitle(tmdbId,type)}
-
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const id=String(tmdbId||"").trim();if(!id)return[];
@@ -381,14 +299,11 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     log(`server resolution candidates=${servers.length}`);
     const valid=await allSettledValues(servers.map(srv=>async()=>{
       log(`resolving source category=${String(srv._category||"")} source=${String(srv.source||"")} title=${String(srv.title||"")}`);
-      const resolved=await resolveExternal(srv);
-      log(`resolved source=${String(srv.source||"")} results=${resolved.length}`);
-      return resolved
+      const resolved=await resolveExternal(srv);log(`resolved source=${String(srv.source||"")} results=${resolved.length}`);return resolved
     }),SOURCE_TIMEOUT);
     const out=[];
     for(const a of valid)for(const x of a||[])if(x&&x.url&&!out.some(y=>y.url===x.url))out.push(x);
     return out
   }catch(e){log("Provider failed: "+(e&&e.message||e));return[]}
 }
-
 module.exports={getStreams};
