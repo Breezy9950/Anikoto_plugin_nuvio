@@ -1,59 +1,112 @@
 {
-  "name":"AniKoto-Nuvio",
-  "version":"1.4.0",
-  "description":"AniKoto, AnimeOnsen and AniZone providers with database-first unified mapping and original stream extraction",
-  "scrapers":[
+  "name": "AniKoto-Nuvio",
+  "version": "1.4.0",
+  "description": "AniKoto, AnimeOnsen and AniZone providers with database-first unified mapping and original stream extraction",
+  "scrapers": [
     {
-      "id":"anikoto",
-      "name":"AniKoto",
-      "description":"AniKoto multi-server anime streams using database-first unified mapping and original scraping",
-      "version":"1.1.0",
-      "author":"Nuvio Team",
-      "filename":"providers/anikoto.js",
-      "supportedTypes":["movie","tv"],
-      "enabled":true,
-      "formats":["m3u8"],
-      "logo":"https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
-      "contentLanguage":["en","ja"]
+      "id": "anikoto",
+      "name": "AniKoto",
+      "description": "AniKoto multi-server anime streams using database-first unified mapping and original scraping",
+      "version": "1.1.0",
+      "author": "Nuvio Team",
+      "filename": "providers/anikoto.js",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
-      "id":"animeonsen",
-      "name":"AnimeOnsen",
-      "description":"AnimeOnsen DASH streams using database-first unified mapping and original scraping",
-      "version":"1.1.0",
-      "author":"Nuvio Team",
-      "filename":"providers/animeonsen.js",
-      "supportedTypes":["movie","tv"],
-      "enabled":true,
-      "formats":["mpd"],
-      "logo":"https://www.google.com/s2/favicons?domain=animeonsen.xyz&sz=128",
-      "contentLanguage":["en","ja"]
+      "id": "animeonsen",
+      "name": "AnimeOnsen",
+      "description": "AnimeOnsen DASH streams using database-first unified mapping and original scraping",
+      "version": "1.1.0",
+      "author": "Nuvio Team",
+      "filename": "providers/animeonsen.js",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "mpd"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=animeonsen.xyz&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
-      "id":"anizone",
-      "name":"AniZone",
-      "description":"AniZone streams using database-first unified mapping and original scraping",
-      "version":"1.1.0",
-      "author":"Nuvio Team",
-      "filename":"providers/anizone.js",
-      "supportedTypes":["movie","tv"],
-      "enabled":true,
-      "formats":["m3u8"],
-      "logo":"https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
-      "contentLanguage":["en","ja"]
+      "id": "anizone",
+      "name": "AniZone",
+      "description": "AniZone streams using database-first unified mapping and original scraping",
+      "version": "1.1.0",
+      "author": "Nuvio Team",
+      "filename": "providers/anizone.js",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
-      "id":"anizone-lazy",
-      "name":"AniZone Lazy",
-      "description":"AniZone streams with database-first unified mapping, lazy population and original scraping",
-      "version":"1.1.0",
-      "author":"Nuvio Team",
-      "filename":"providers/anizone-lazy.js",
-      "supportedTypes":["movie","tv"],
-      "enabled":true,
-      "formats":["m3u8"],
-      "logo":"https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
-      "contentLanguage":["en","ja"]
+      "id": "anizone-lazy",
+      "name": "AniZone Lazy",
+      "description": "AniZone streams with database-first unified mapping, lazy population and original scraping",
+      "version": "1.1.0",
+      "author": "Nuvio Team",
+      "filename": "providers/anizone-lazy.js",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "anisnatch",
+      "name": "AniSnatch",
+      "description": "AniSnatch aggregator with database-first lazy mapping, hard-sub 1080p+ filtering and MegaPlay/VidTube/VidWish resolution",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/anisnatch.js",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=anisnatch.to&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     }
   ]
 }
