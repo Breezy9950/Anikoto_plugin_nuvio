@@ -51,7 +51,7 @@ function hostForSource(source){
   if(s.startsWith("vidtube/"))return"https://vidtube.site";
   return null
 }
-function pageForSource(source){return BASE+"/video/"+String(source||"")+"-"+PROXY_PARAM+"-en"}
+function pageForSource(source){const proxy=STATE.proxyParam||PROXY_PARAM;return BASE+"/video/"+String(source||"")+"-"+proxy+"-en"}
 
 function b64std(a){const abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",u=a instanceof Uint8Array?a:new Uint8Array(a),o=[];for(let i=0;i<u.length;i+=3){const x=u[i],y=i+1<u.length?u[i+1]:0,z=i+2<u.length?u[i+2]:0;o.push(abc[x>>2],abc[((x&3)<<4)|(y>>4)],i+1<u.length?abc[((y&15)<<2)|(z>>6)]:"=",i+2<u.length?abc[z&63]:"=")}return o.join("")}
 function hexEncode(s){let o="";for(let i=0;i<s.length;i++)o+=s.charCodeAt(i).toString(16).padStart(2,"0");return o}
@@ -147,7 +147,7 @@ function makePayload(dataObj,key){
   let auth=0;for(let i=0;i<token.length;i++)auth+=token.charCodeAt(i);
   return[{data,key:ids,token,authenticator:String(auth)},String(auth)]
 }
-const STATE={key:null,mark:null,timeOffset:0,snatchToken:null,initPromise:null};
+const STATE={key:null,mark:null,timeOffset:0,snatchToken:null,proxyParam:null,initPromise:null};
 async function initCrypto(){
   if(STATE.key&&STATE.mark)return;
   if(STATE.initPromise)return STATE.initPromise;
@@ -160,8 +160,21 @@ async function initCrypto(){
     for(let i=0;i<raw.length;i++)x[i]=raw[i]^fullKey[i%fullKey.length];
     const cfg=JSON.parse(utf8(x));STATE.key=String(cfg.key||"");STATE.mark=cfg.mark?Uint8Array.from(cfg.mark.map(Number)):null;
     STATE.timeOffset=Number(tm[1])-Math.floor(Date.now()/1000);
+    STATE.proxyParam=cfg.proxys&&typeof cfg.proxys==="object"?Object.keys(cfg.proxys).join("~"):"";
     if(!STATE.key||!STATE.mark||!STATE.mark.length)throw new Error("AniSnatch crypto config invalid");
   })().finally(()=>{STATE.initPromise=null});return STATE.initPromise
+}
+async function responseBytes(r){
+  if(r&&typeof r.arrayBuffer==="function"){
+    try{return new Uint8Array(await r.arrayBuffer())}catch(e){log("arrayBuffer failed: "+(e&&e.message||e))}
+  }
+  if(r&&typeof r.bytes==="function"){
+    try{const b=await r.bytes();return b instanceof Uint8Array?b:new Uint8Array(b)}catch(e){log("bytes failed: "+(e&&e.message||e))}
+  }
+  if(r&&typeof r.blob==="function"){
+    try{const b=await r.blob();if(b&&typeof b.arrayBuffer==="function")return new Uint8Array(await b.arrayBuffer())}catch(e){log("blob failed: "+(e&&e.message||e))}
+  }
+  throw new Error("Nuvio response has no binary reader")
 }
 async function postAjax(endpoint,dataObj,referer){
   await initCrypto();
@@ -169,21 +182,21 @@ async function postAjax(endpoint,dataObj,referer){
   const url=BASE+"/api/"+endpoint+"/"+Math.floor(Date.now()/1000+STATE.timeOffset);
   const headers={"User-Agent":UA,"Content-Type":"application/json","X-Requested-With":"XMLHttpRequest","Referer":referer||BASE+"/home"};
   log(`POST ${url}`);const r=await req(url,{method:"POST",headers,body:JSON.stringify(payload)},TIMEOUT);if(!r||!r.ok)throw new Error(`AniSnatch API HTTP ${r?r.status:"NO_RESPONSE"}`);
-  const resp=new Uint8Array(await r.arrayBuffer()),mark=STATE.mark;let pos=-1;
+  const resp=await responseBytes(r),mark=STATE.mark;log("API response bytes="+resp.length);let pos=-1;
   outer:for(let i=0;i<=resp.length-mark.length;i++){for(let j=0;j<mark.length;j++)if(resp[i+j]!==mark[j])continue outer;pos=i+mark.length;break}
-  if(pos<0)throw new Error("AniSnatch marker not found")
+  if(pos<0){let preview="";try{preview=await r.clone().text()}catch(e){}throw new Error("AniSnatch marker not found; response="+preview.slice(0,160))}
   const enc=resp.slice(pos),auth=utf8enc(authenticator),xored=new Uint8Array(enc.length);
   for(let i=0;i<enc.length;i++)xored[i]=enc[i]^auth[i%auth.length];
-  const plain=_gzipInflate(xored);return JSON.parse(utf8(plain))
+  const plain=_gzipInflate(xored),parsed=JSON.parse(utf8(plain));log("API decoded "+endpoint+" keys="+Object.keys(parsed||{}).join(","));return parsed
 }
 async function getSnatchToken(){
   if(STATE.snatchToken)return STATE.snatchToken;
-  const r=await postAjax("init",{token:null},null);if(!r||r.success!==true||!r.token)throw new Error("AniSnatch token unavailable");
-  STATE.snatchToken=String(r.token);return STATE.snatchToken
+  const r=await postAjax("init",{token:null},null);if(!r||r.success!==true||!(r.id||r.token))throw new Error("AniSnatch token unavailable");
+  STATE.snatchToken=String(r.id||r.token);if(r.proxys&&typeof r.proxys==="object")STATE.proxyParam=Object.keys(r.proxys).join("~");return STATE.snatchToken
 }
 async function lazyMapping(tmdbId,season,episode){
   try{
-    const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&tmdb_id="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode);
+    const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&tmdb_id="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode)+"&pending=1";
     const d=await json(u,{},7000);if(!d||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);
     if(!mal||!Number.isInteger(ep)||ep<1)return null;
     return{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],source:d.source||"lazy"}
@@ -198,9 +211,9 @@ async function findAniSnatch(titleData){
   const results=await allSettledValues(qs.map(q=>async()=>{try{const r=await postAjax("quickSearch",{keyword:q},null);const a=r&&r.data&&Array.isArray(r.data.anime)?r.data.anime:Array.isArray(r&&r.anime)?r.anime:Array.isArray(r&&r.data)?r.data:[];return a.filter(x=>x&&typeof x==="object")}catch(e){log(`quickSearch failed: ${e&&e.message||e}`);return[]}}),5000);
   const all=[];for(const a of results)for(const x of a)if(x&&!all.some(y=>String(y.id||"")===String(x.id||"")))all.push(x);
   if(!all.length)return null;
-  let best=null,score=-1;for(const x of all){const s=Math.max(titleScore(titleData.title,x.title),...((x.titles||x.al||[]).map(y=>titleScore(titleData.title,y))));if(s>score){score=s;best=x}}
-  if(!best||!best.id||score<60)return null;
-  return{aniId:String(best.id),title:String(best.title||titleData.title),score}
+  let best=null,score=-1;for(const x of all){const names=uniq([x.title_en,x.title,x.name,x.al,...(Array.isArray(x.titles)?x.titles:[]),...(Array.isArray(x.al)?x.al:[])]);const s=Math.max(...names.map(y=>titleScore(titleData.title,y)),0);if(s>score){score=s;best=x}}
+  const aniId=best&&best.id!=null?best.id:(best&&best.al!=null?best.al:null);if(aniId==null)return null;
+  return{aniId:String(aniId),title:String(best.title_en||best.title||best.name||titleData.title),score}
 }
 function normalizeServerArray(v){return Array.isArray(v)?v.filter(x=>x&&typeof x==="object"):[]}
 async function loadServers(aniId,episode,token){
@@ -233,7 +246,7 @@ async function resolveExternal(server){
   if(!streamId)return[];
   const endpoints=host.includes("megaplay.buzz")?["/stream/getSourcesNew","/stream/getSources"]:["/stream/getSources","/stream/getSourcesNew"];
   for(const ep of endpoints){
-    const r=await json(host+ep+"?id="+encodeURIComponent(streamId)+"&type="+encodeURIComponent("Soft Sub"),{headers:ajaxHeaders},SOURCE_TIMEOUT);if(!r)continue;
+    const r=await json(host+ep+"?id="+encodeURIComponent(streamId)+"&type="+encodeURIComponent("sub"),{headers:ajaxHeaders},SOURCE_TIMEOUT);if(!r)continue;
     let file=null;if(r.sources&&typeof r.sources==="object"&&!Array.isArray(r.sources))file=r.sources.file;else if(Array.isArray(r.sources)&&r.sources[0])file=r.sources[0].file;
     if(!file&&r.file)file=r.file;if(!file&&r.enc)file=decryptSource(r.enc);
     file=cleanUrl(file);if(!file||!/^https?:\/\//i.test(file))continue;
