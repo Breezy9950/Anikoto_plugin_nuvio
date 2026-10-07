@@ -1497,66 +1497,11 @@ async function loadServers(aniId,episode,token){
   );
 
   if(
-    r.server&&
-    typeof r.server==="object"
-  ){
-    const cats=Object.keys(r.server);
-
-    log(
-      `loadSVs server categories=${
-        cats.join(",")||"(none)"
-      }`
-    );
-
-    for(const category of cats){
-      const value=r.server[category];
-
-      if(Array.isArray(value)){
-        log(
-          `loadSVs category=${category} `+
-          `count=${value.length}`
-        );
-
-        for(
-          let i=0;
-          i<Math.min(value.length,8);
-          i++
-        ){
-          const x=value[i]||{};
-
-          log(
-            `loadSVs server[${category}][${i}] `+
-            `source=${String(x.source||"")} `+
-            `title=${String(x.title||"")} `+
-            `keys=${Object.keys(x).join(",")}`
-          )
-        }
-      }else{
-        log(
-          `loadSVs category=${category} `+
-          `type=${typeof value} `+
-          `value=${JSON.stringify(value).slice(0,500)}`
-        )
-      }
-    }
-  }else{
-    log(
-      `loadSVs server invalid type=${
-        typeof r.server
-      } value=${
-        JSON.stringify(r.server).slice(0,500)
-      }`
-    )
-  }
-
-  if(
     r.success!==true||
     !r.server||
     typeof r.server!=="object"
   ){
-    log(
-      "loadSVs rejected: success/server validation failed"
-    );
+    log("loadSVs rejected: success/server validation failed");
     return[]
   }
 
@@ -1595,24 +1540,7 @@ async function loadServers(aniId,episode,token){
     return true
   });
 
-  log(
-    `loadSVs selected servers=${unique.length}`
-  );
-
-  for(
-    let i=0;
-    i<Math.min(unique.length,20);
-    i++
-  ){
-    const x=unique[i];
-
-    log(
-      `selected[${i}] `+
-      `category=${x._category} `+
-      `source=${String(x.source||"")} `+
-      `title=${String(x.title||"")}`
-    )
-  }
+  log(`loadSVs selected servers=${unique.length}`);
 
   return unique
 }
@@ -1648,6 +1576,48 @@ function signAniSnatchUrl(url){
   }catch(e){
     return url
   }
+}
+
+/*
+ * CDN proxy map. Ported from the original Kotlin extractor's
+ * proxyAniSnatchHost(). Any playback URL pointing at a vault-*.uwucdn.top
+ * or vibeplayer.site host must be rewritten before the player sees it,
+ * otherwise the CDN returns 403.
+ */
+const PROXY_MAP={
+  "vibeplayer.site":"nanobyte.bigdreamsmalldih.site",
+  "vault-01.uwucdn.top":"uwu1.bigdreamsmalldih.site",
+  "vault-02.uwucdn.top":"uwu2.bigdreamsmalldih.site",
+  "vault-03.uwucdn.top":"uwu3.bigdreamsmalldih.site",
+  "vault-04.uwucdn.top":"uwu4.bigdreamsmalldih.site",
+  "vault-05.uwucdn.top":"uwu5.bigdreamsmalldih.site",
+  "vault-06.uwucdn.top":"uwu6.bigdreamsmalldih.site",
+  "vault-07.uwucdn.top":"uwu7.bigdreamsmalldih.site",
+  "vault-08.uwucdn.top":"uwu8.bigdreamsmalldih.site",
+  "vault-09.uwucdn.top":"uwu9.bigdreamsmalldih.site",
+  "vault-10.uwucdn.top":"uwu10.bigdreamsmalldih.site",
+  "vault-11.uwucdn.top":"uwu11.bigdreamsmalldih.site",
+  "vault-12.uwucdn.top":"uwu12.bigdreamsmalldih.site",
+  "vault-13.uwucdn.top":"uwu13.bigdreamsmalldih.site",
+  "vault-14.uwucdn.top":"uwu14.bigdreamsmalldih.site",
+  "vault-15.uwucdn.top":"uwu15.bigdreamsmalldih.site",
+  "vault-16.uwucdn.top":"uwu16.bigdreamsmalldih.site",
+  "vault-99.uwucdn.top":"uwu17.bigdreamsmalldih.site",
+  "vault-10.owocdn.top":"10.bigdreamsmalldih.site",
+  "vault-11.owocdn.top":"11.bigdreamsmalldih.site",
+  "vault-12.owocdn.top":"12.bigdreamsmalldih.site",
+  "vault-13.owocdn.top":"13.bigdreamsmalldih.site",
+  "vault-14.owocdn.top":"14.bigdreamsmalldih.site",
+  "vault-15.owocdn.top":"15.bigdreamsmalldih.site",
+  "vault-16.owocdn.top":"16.bigdreamsmalldih.site",
+  "vault-99.owocdn.top":"99.bigdreamsmalldih.site"
+};
+
+function proxyAniSnatchHost(url){
+  let u=String(url||"");
+  for(const k of Object.keys(PROXY_MAP))
+    u=u.split(k).join(PROXY_MAP[k]);
+  return u
 }
 
 function decryptSource(enc){
@@ -1712,125 +1682,38 @@ function parseServerSource(source){
   }
 }
 
-function directEmbedUrls(server){
-  const source=String(server&&server.source||"");
-  const p=parseServerSource(source);
-
-  if(!p||!p.malId||!p.episode)
-    return[];
-
-  const lang=p.lang||"en";
-  const out=[];
-
-  /*
-   * MegaPlay's MAL-based stream route.
-   * Verified working: GET /stream/mal/{malId}/{episode}/{lang} -> 200
-   */
-  if(p.provider==="megaplay"){
-    out.push(
-      "https://megaplay.buzz/stream/mal/"+
-      encodeURIComponent(p.malId)+"/"+
-      encodeURIComponent(p.episode)+"/"+
-      encodeURIComponent(lang)
-    )
-  }
-
-  /*
-   * VidWish / VidTube /stream/mal/... routes currently 404.
-   * Removed to avoid wasted requests; re-enable if they come back.
-   */
-
-  return uniq(out)
-}
-
 function extractUrlsFromHtml(html){
   const out=[];
   const h=String(html||"");
 
-  /*
-   * iframe/embed src
-   */
   const iframeRe=/<(?:iframe|embed)[^>]+(?:src|data-src)=["']([^"']+)["']/gi;
-
   let m;
 
   while((m=iframeRe.exec(h))){
     const u=cleanUrl(m[1]);
-
     if(/^https?:\/\//i.test(u))
       out.push(u)
   }
 
-  /*
-   * Absolute URLs in HTML.
-   */
   const absRe=/https?:\/\/[^"'\\\s<>]+/gi;
 
   while((m=absRe.exec(h))){
     const u=cleanUrl(
-      m[0]
-        .replace(/[),;]+$/,"")
+      m[0].replace(/[),;]+$/,"")
     );
+
+    if(/\.(?:css|js|png|jpe?g|gif|svg|woff2?|ico)(?:\?|$)/i.test(u))
+      continue;
 
     if(
       /\/stream\//i.test(u)||
       /getSources/i.test(u)||
-      /megaplay/i.test(u)||
-      /vidwish/i.test(u)||
-      /vidtube/i.test(u)
+      /\/(?:embed|player|watch)\//i.test(u)
     )
       out.push(u)
   }
 
   return uniq(out)
-}
-
-function extractStreamId(html){
-  const h=String(html||"");
-  let m;
-
-  /*
-   * 1. Original attribute-based patterns (kept for compatibility)
-   */
-  m=/id=["']megaplay-player["'][^>]*data-id=["']([^"']+)["']/i.exec(h);
-  if(!m)m=/data-id=["']([^"']+)["'][^>]*id=["']megaplay-player["']/i.exec(h);
-  if(!m)m=/data-realid=["']([^"']+)["']/i.exec(h);
-  if(!m)m=/data-video-id=["']([^"']+)["']/i.exec(h);
-  if(!m)m=/data-stream-id=["']([^"']+)["']/i.exec(h);
-
-  /*
-   * 2. Any data-id anywhere (drop the "megaplay-player" requirement)
-   */
-  if(!m)m=/data-id=["']([^"']+)["']/i.exec(h);
-
-  /*
-   * 3. /stream/s-N/{id} path style
-   */
-  if(!m)m=/\/stream\/s-\d+\/([A-Za-z0-9_-]+)/i.exec(h);
-
-  /*
-   * 4. JS variables assigned in inline scripts
-   */
-  if(!m)m=/\b(?:dataId|data_id|streamId|stream_id|videoId|video_id|sourceId|source_id)\s*[:=]\s*["']([A-Za-z0-9_-]{4,})["']/i.exec(h);
-
-  /*
-   * 5. JSON-ish quoted keys with a value
-   */
-  if(!m)m=/"(?:dataId|data_id|streamId|stream_id|videoId|video_id)"\s*:\s*"([^"]+)"/i.exec(h);
-
-  /*
-   * 6. UUID-looking token (last resort)
-   */
-  if(!m)m=/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(h);
-
-  if(m){
-    const id=String(m[1]||"").trim();
-
-    if(id)
-      return id
-  }
-
-  return null
 }
 
 function extractPlayableFile(r){
@@ -1850,9 +1733,7 @@ function extractPlayableFile(r){
       r.sources.src||
       r.sources.fileUrl||
       r.sources.file_url
-  }else if(
-    Array.isArray(r.sources)
-  ){
+  }else if(Array.isArray(r.sources)){
     for(const s of r.sources){
       if(!s||typeof s!=="object")
         continue;
@@ -1887,6 +1768,9 @@ function extractPlayableFile(r){
   if(!file&&r.enc)
     file=decryptSource(r.enc);
 
+  if(file)
+    file=proxyAniSnatchHost(file);
+
   return cleanUrl(file)
 }
 
@@ -1905,43 +1789,21 @@ function sourceTracks(r,headers){
     if(!t||typeof t!=="object")
       continue;
 
-    const kind=String(
-      t.kind||
-      t.type||
-      ""
-    );
+    const kind=String(t.kind||t.type||"");
 
-    if(
-      kind&&
-      !/^(captions|subtitles|subtitle|caption)$/i.test(kind)
-    )
+    if(kind&&!/^(captions|subtitles|subtitle|caption)$/i.test(kind))
       continue;
 
-    const u=cleanUrl(
-      t.file||
-      t.url||
-      t.src
-    );
+    const u=cleanUrl(t.file||t.url||t.src);
 
     if(!/^https?:\/\//i.test(u))
       continue;
 
     subtitles.push({
       url:u,
-      name:String(
-        t.label||
-        t.name||
-        "English"
-      ),
-      language:String(
-        t.language||
-        t.lang||
-        "en"
-      ),
-      format:String(
-        t.format||
-        "vtt"
-      ).replace(/^\./,"")||"vtt",
+      name:String(t.label||t.name||"English"),
+      language:String(t.language||t.lang||"en"),
+      format:String(t.format||"vtt").replace(/^\./,"")||"vtt",
       default:true,
       headers
     })
@@ -1970,138 +1832,78 @@ async function resolveSourceResponse(
     "Referer":host+"/"
   };
 
-  const endpoints=
-    host.includes("megaplay.buzz")?
-      [
-        "/stream/getSources",
-        "/stream/getSourcesNew"
-      ]:
-      [
-        "/stream/getSources",
-        "/stream/getSourcesNew"
-      ];
+  const endpoints=[
+    "/stream/getSources",
+    "/stream/getSourcesNew"
+  ];
 
   for(const ep of endpoints){
+    /*
+     * Do NOT encodeURIComponent the streamId — the server expects
+     * raw slashes in the id query value (verified with curl).
+     */
     const u=
       host+
       ep+
       "?id="+
-      encodeURIComponent(streamId);
+      streamId;
 
-    log(
-      `extractor ${u}`
-    );
+    log(`extractor ${u}`);
 
     let r=null;
 
     try{
-      r=await json(
-        u,
-        {headers:ajaxHeaders},
-        SOURCE_TIMEOUT
-      )
+      r=await json(u,{headers:ajaxHeaders},SOURCE_TIMEOUT)
     }catch(e){
       r=null
     }
 
     if(!r){
-      log(
-        "extractor empty"
-      );
+      log("extractor empty");
       continue
     }
 
-    log(
-      "extractor response keys="+
-      Object.keys(r).join(",")
-    );
+    log("extractor response keys="+Object.keys(r).join(","));
 
     const file=extractPlayableFile(r);
 
-    if(
-      !file||
-      !/^https?:\/\//i.test(file)
-    ){
-      log(
-        "extractor returned no playable URL"
-      );
+    if(!file||!/^https?:\/\//i.test(file)){
+      log("extractor returned no playable URL");
       continue
     }
 
-    log(
-      "extractor URL obtained"
-    );
+    log("extractor URL obtained");
 
     const signed=signAniSnatchUrl(file);
 
-    const qualityMeta={
-      ...server,
-      ...r
-    };
+    const qualityMeta={...server,...r};
 
-    const h=await inspectHls(
-      signed,
-      playbackHeaders,
-      qualityMeta
-    );
+    const h=await inspectHls(signed,playbackHeaders,qualityMeta);
 
     if(!h){
-      log(
-        "HLS rejected/no usable HLS playlist"
-      );
+      log("HLS rejected/no usable HLS playlist");
       continue
     }
 
-    const subtitles=
-      sourceTracks(
-        r,
-        playbackHeaders
-      );
+    const subtitles=sourceTracks(r,playbackHeaders);
 
     const name=
-      host.includes("megaplay")?
-        "MegaPlay":
-      host.includes("vidtube")?
-        "VidTube":
-        "VidWish";
+      host.includes("megaplay")?"MegaPlay":
+      host.includes("vidtube")?"VidTube":
+      "VidWish";
 
-    const label=
-      String(
-        server.title||
-        "AniSnatch"
-      );
+    const label=String(server.title||"AniSnatch");
 
     return{
-      name:
-        name+
-        " [HSub]",
-
-      title:
-        label+
-        " [HSub]",
-
+      name:name+" [HSub]",
+      title:label+" [HSub]",
       url:h.url,
-
-      quality:
-        String(h.max||1080)+
-        "p",
-
+      quality:String(h.max||1080)+"p",
       headers:playbackHeaders,
-
-      subtitle:
-        subtitles[0]?
-          subtitles[0].url:
-          "",
-
-      subtitleFormat:
-        subtitles[0]?
-          subtitles[0].format:
-          "",
-
+      subtitle:subtitles[0]?subtitles[0].url:"",
+      subtitleFormat:subtitles[0]?subtitles[0].format:"",
       subtitles,
-
       backup:false,
-
       _source:name
     }
   }
@@ -2110,160 +1912,52 @@ async function resolveSourceResponse(
 }
 
 async function resolveExternal(server){
-  const source=
-    String(
-      server&&server.source||
-      ""
-    ).trim();
+  const source=String(server&&server.source||"").trim();
 
-  const host=
-    hostForSource(source);
+  const host=hostForSource(source);
 
   if(!host){
-    log(
-      `unsupported source=${source}`
-    );
+    log(`unsupported source=${source}`);
     return[]
   }
 
   const parsed=parseServerSource(source);
 
-  const type=
-    /\/dub(?:\/|$)/i.test(source)?
-      "dub":
-      "sub";
-
-  const playbackHeaders={
-    "User-Agent":UA,
-    "Referer":host+"/"
-  };
+  const type=/\/dub(?:\/|$)/i.test(source)?"dub":"sub";
 
   /*
    * ------------------------------------------------------------
-   * PATH 1 — DIRECT MAL EMBED
+   * PATH 1 — DIRECT getSources
    * ------------------------------------------------------------
+   *
+   * The stream ID is the malId/episode/lang triple taken
+   * directly from the AniSnatch source string. No HTML fetch
+   * is required. This matches the URL shape the site itself
+   * uses and the endpoints that respond 200 to curl:
+   *
+   *   /stream/getSources?id=42897/5/en
+   *   /stream/getSources?id=42897-5-en
+   *   /stream/getSourcesNew?id=42897/5/en
    */
-  const directUrls=directEmbedUrls(server);
+  if(parsed&&parsed.malId&&parsed.episode){
+    const streamId=
+      parsed.malId+"/"+
+      parsed.episode+"/"+
+      (parsed.lang||"en");
 
-  log(
-    `direct embed candidates=${directUrls.length}`+
-    (parsed?
-      ` provider=${parsed.provider} malId=${parsed.malId} episode=${parsed.episode} lang=${parsed.lang}`:
-      "")
-  );
-
-  for(const embedUrl of directUrls){
-    log(
-      `direct embed GET ${embedUrl}`
-    );
-
-    const embedHtml=await text(
-      embedUrl,
-      {
-        headers:{
-          "User-Agent":UA,
-          "Accept":"text/html, */*",
-          "Referer":BASE+"/"
-        }
-      },
-      SOURCE_TIMEOUT
-    );
-
-    if(!embedHtml){
-      log(
-        "direct embed returned empty"
-      );
-      continue
-    }
-
-    log(
-      `direct embed HTML chars=${embedHtml.length}`
-    );
-
-    /*
-     * DIAG — remove after the extractor is confirmed working.
-     */
-    try{
-      const ids=(embedHtml.match(/id=["'][^"']+["']/gi)||[]).slice(0,20);
-      const dataAttrs=(embedHtml.match(/data-[a-z0-9-]+=["'][^"']+["']/gi)||[]).slice(0,20);
-      const scripts=(embedHtml.match(/<script[^>]*>[\s\S]{0,200}/gi)||[]).slice(0,5);
-
-      log("DIAG ids="+ids.join(" | "));
-      log("DIAG data="+dataAttrs.join(" | "));
-      log("DIAG scripts="+scripts.map(s=>s.slice(0,180).replace(/\s+/g," ")).join(" || "));
-    }catch(e){}
-
-    let streamId=
-      extractStreamId(embedHtml);
-
-    log(
-      `direct embed streamId=${
-        streamId||"(none)"
-      }`
-    );
-
-    /*
-     * If the player ID is not directly present,
-     * inspect iframe/embed URLs contained in the
-     * external player page.
-     */
-    if(!streamId){
-      const nested=extractUrlsFromHtml(
-        embedHtml
-      );
-
-      log(
-        `direct embed nested URLs=${nested.length}`
-      );
-
-      for(const nestedUrl of nested){
-        const nestedHtml=await text(
-          nestedUrl,
-          {
-            headers:{
-              "User-Agent":UA,
-              "Accept":"text/html, */*",
-              "Referer":embedUrl
-            }
-          },
-          SOURCE_TIMEOUT
-        );
-
-        if(!nestedHtml)
-          continue;
-
-        streamId=
-          extractStreamId(
-            nestedHtml
-          );
-
-        if(streamId){
-          log(
-            `nested player streamId=${streamId}`
-          );
-
-          break
-        }
-      }
-    }
-
-    if(!streamId)
-      continue;
+    log(`direct streamId=${streamId}`);
 
     const resolved=
       await resolveSourceResponse(
         host,
         streamId,
         type,
-        embedUrl,
+        host+"/",
         server
       );
 
     if(resolved){
-      log(
-        `direct embed resolved source=${source}`
-      );
-
+      log(`direct resolved source=${source}`);
       return[resolved]
     }
   }
@@ -2272,53 +1966,28 @@ async function resolveExternal(server){
    * ------------------------------------------------------------
    * PATH 2 — ANI-SNATCH VIDEO WRAPPER (fallback)
    * ------------------------------------------------------------
+   * Kept as a soft fallback in case a future source uses a
+   * different routing scheme. Rarely reached in practice.
    */
-  const page=
-    pageForSource(source);
+  const page=pageForSource(source);
 
   const pageHeaders={
     "Referer":BASE+"/",
     "Accept":"*/*"
   };
 
-  const html=await text(
-    page,
-    {
-      headers:pageHeaders
-    },
-    SOURCE_TIMEOUT
-  );
+  const html=await text(page,{headers:pageHeaders},SOURCE_TIMEOUT);
 
   if(!html){
-    log(
-      `AniSnatch video page empty source=${source}`
-    );
+    log(`AniSnatch video page empty source=${source}`);
     return[]
   }
 
-  log(
-    `AniSnatch video HTML chars=${html.length} source=${source}`
-  );
+  log(`AniSnatch video HTML chars=${html.length} source=${source}`);
 
-  let streamId=
-    extractStreamId(html);
+  const nestedUrls=extractUrlsFromHtml(html);
 
-  log(
-    `AniSnatch video streamId=${
-      streamId||"(none)"
-    }`
-  );
-
-  /*
-   * First inspect any iframe/embed URL from
-   * the AniSnatch wrapper.
-   */
-  const nestedUrls=
-    extractUrlsFromHtml(html);
-
-  log(
-    `AniSnatch wrapper nested URLs=${nestedUrls.length}`
-  );
+  log(`AniSnatch wrapper nested URLs=${nestedUrls.length}`);
 
   for(const nestedUrl of nestedUrls){
     const lower=nestedUrl.toLowerCase();
@@ -2333,80 +2002,24 @@ async function resolveExternal(server){
     )
       continue;
 
-    const streamPath=
-      /\/stream\/[^/]+\/([^/?#]+)/i.exec(
-        nestedUrl
-      );
+    const m=/\/stream\/[^/]+\/([^/?#]+)/i.exec(nestedUrl);
+    if(!m)
+      continue;
 
-    if(!streamId&&streamPath)
-      streamId=String(
-        streamPath[1]
-      ).trim();
+    const streamPath=String(m[1]).trim();
 
-    if(!streamId){
-      const nestedHtml=await text(
-        nestedUrl,
-        {
-          headers:{
-            "User-Agent":UA,
-            "Accept":"text/html, */*",
-            "Referer":page
-          }
-        },
-        SOURCE_TIMEOUT
-      );
+    const nestedHost=
+      /megaplay/i.test(nestedUrl)?"https://megaplay.buzz":
+      /vidwish/i.test(nestedUrl)?"https://vidwish.live":
+      /vidtube/i.test(nestedUrl)?"https://vidtube.site":
+      host;
 
-      if(nestedHtml){
-        log(
-          `nested HTML chars=${nestedHtml.length}`
-        );
-
-        streamId=
-          extractStreamId(
-            nestedHtml
-          )
-      }
-    }
-
-    if(streamId){
-      log(
-        `wrapper nested streamId=${streamId}`
-      );
-
-      const nestedHost=
-        /megaplay/i.test(nestedUrl)?
-          "https://megaplay.buzz":
-        /vidwish/i.test(nestedUrl)?
-          "https://vidwish.live":
-        /vidtube/i.test(nestedUrl)?
-          "https://vidtube.site":
-          host;
-
-      const resolved=
-        await resolveSourceResponse(
-          nestedHost,
-          streamId,
-          type,
-          nestedUrl,
-          server
-        );
-
-      if(resolved)
-        return[resolved]
-    }
-  }
-
-  /*
-   * Finally use a player ID directly found
-   * in the AniSnatch HTML.
-   */
-  if(streamId){
     const resolved=
       await resolveSourceResponse(
-        host,
-        streamId,
+        nestedHost,
+        streamPath,
         type,
-        page,
+        nestedUrl,
         server
       );
 
@@ -2414,18 +2027,12 @@ async function resolveExternal(server){
       return[resolved]
   }
 
-  log(
-    `no playable external source source=${source}`
-  );
-
+  log(`no playable external source source=${source}`);
   return[]
 }
 
 async function fallbackTitle(tmdbId,type){
-  return await tmdbTitle(
-    tmdbId,
-    type
-  )
+  return await tmdbTitle(tmdbId,type)
 }
 
 async function getStreams(
@@ -2436,100 +2043,60 @@ async function getStreams(
   settings={}
 ){
   try{
-    const id=
-      String(
-        tmdbId||""
-      ).trim();
-
+    const id=String(tmdbId||"").trim();
     if(!id)
       return[];
 
-    const s=
-      Number(season)||1;
+    const s=Number(season)||1;
+    const e=Number(episode)||1;
+    const type=String(mediaType||"tv").toLowerCase();
 
-    const e=
-      Number(episode)||1;
-
-    const type=
-      String(
-        mediaType||"tv"
-      ).toLowerCase();
-
-    let mapped=
-      await lazyMapping(
-        id,
-        s,
-        e
-      );
-
+    let mapped=await lazyMapping(id,s,e);
     let titleData=mapped;
 
     if(!titleData){
-      titleData=
-        await fallbackTitle(
-          id,
-          type
-        );
-
+      titleData=await fallbackTitle(id,type);
       if(!titleData)
         return[]
     }
 
-    const ani=
-      await findAniSnatch(
-        titleData
-      );
-
+    const ani=await findAniSnatch(titleData);
     if(!ani)
       return[];
 
     let token;
 
     try{
-      token=
-        await getSnatchToken()
+      token=await getSnatchToken()
     }catch(err){
-      log(
-        "Token failed: "+
-        err.message
-      );
-
+      log("Token failed: "+err.message);
       return[]
     }
 
-    let servers=
-      await loadServers(
-        ani.aniId,
-        mapped?
-          mapped.malEpisode:
-          e,
-        token
-      );
+    let servers=await loadServers(
+      ani.aniId,
+      mapped?mapped.malEpisode:e,
+      token
+    );
 
     if(!servers.length){
       STATE.snatchToken=null;
 
       try{
-        token=
-          await getSnatchToken();
+        token=await getSnatchToken();
 
-        servers=
-          await loadServers(
-            ani.aniId,
-            mapped?
-              mapped.malEpisode:
-              e,
-            token
-          )
+        servers=await loadServers(
+          ani.aniId,
+          mapped?mapped.malEpisode:e,
+          token
+        )
       }catch(err){}
     }
 
     if(!servers.length)
       return[];
 
-    log(
-      `server resolution candidates=${servers.length}`
-    );
+    log(`server resolution candidates=${servers.length}`);
 
     const valid=
       await allSettledValues(
@@ -2542,10 +2109,7 @@ async function getStreams(
               `title=${String(srv.title||"")}`
             );
 
-            const resolved=
-              await resolveExternal(
-                srv
-              );
+            const resolved=await resolveExternal(srv);
 
             log(
               `resolved source=${String(srv.source||"")} `+
@@ -2565,23 +2129,15 @@ async function getStreams(
         if(
           x&&
           x.url&&
-          !out.some(
-            y=>y.url===x.url
-          )
+          !out.some(y=>y.url===x.url)
         )
           out.push(x);
 
-    log(
-      `final streams=${out.length}`
-    );
+    log(`final streams=${out.length}`);
 
     return out
   }catch(e){
-    log(
-      "Provider failed: "+
-      (e&&e.message||e)
-    );
-
+    log("Provider failed: "+(e&&e.message||e));
     return[]
   }
 }
