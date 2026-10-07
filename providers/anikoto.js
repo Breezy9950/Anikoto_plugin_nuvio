@@ -1,5 +1,5 @@
 /* AniKoto Nuvio provider: optimized, cached, parallel extraction. */
-const ANIKOTO_URL="https://anikototv.to",AJAX_URL=ANIKOTO_URL+"/ajax",MAPPER_URL="https://mapper.nekostream.site",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-mapping",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"Referer":ANIKOTO_URL+"/","X-Requested-With":"XMLHttpRequest","User-Agent":UA},TIMEOUT=15000;
+const ANIKOTO_URL="https://anikototv.to",AJAX_URL=ANIKOTO_URL+"/ajax",MAPPER_URL="https://mapper.nekostream.site",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"Referer":ANIKOTO_URL+"/","X-Requested-With":"XMLHttpRequest","User-Agent":UA},TIMEOUT=15000;
 function log(x){console.log("[AniKoto] "+x)}
 class NuvioTTLCache{constructor(){this.m=new Map()}get(k){const x=this.m.get(k);if(!x)return;if(x.e<=Date.now()){this.m.delete(k);return}return x.v}set(k,v,ttl){this.m.set(k,{v,e:Date.now()+ttl});return v}delete(k){this.m.delete(k)}}
 const CACHE=globalThis.__NUVIO_PROVIDER_CACHE__||(globalThis.__NUVIO_PROVIDER_CACHE__=new NuvioTTLCache());
@@ -25,34 +25,14 @@ function uniq(a){return [...new Set((a||[]).filter(Boolean).map(String))]}
 function norm(v){return String(v||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g,"")}
 function clean(v){return typeof v==="string"?v.replace(/\\/g,""):v}
 
-async function getMapping(id,s,e){return memo("anikoto:mapping:"+id+":"+s+":"+e,MAP_TTL,async()=>{const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(id)+"&season="+encodeURIComponent(s)+"&episode="+encodeURIComponent(e),d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},3000);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=ints(m.mal_episode||m.target_episode);return mal&&ep?{malId:mal,malEpisode:ep,title:String(m.anime_title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}:null})}
-
-const LAZY_MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",TMDB_API="https://api.themoviedb.org/3",TMDB_KEY="68e094699525b18a70bab2f86b1fa706";
-async function lazyMapping(id,s,e){try{const u=LAZY_MAPPING_URL+"?tmdb_id="+encodeURIComponent(id)+"&tmdbId="+encodeURIComponent(id)+"&season="+s+"&episode="+e,d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},2500);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=ints(m.mal_episode||m.target_episode);return mal&&ep?{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],source:"lazy"}:null}catch(e){return null}}
-function triggerPopulation(seed){if(!seed||!seed.tmdb_id)return;try{void fetch(POPULATE_URL,{method:"POST",headers:{Accept:"application/json","Content-Type":"application/json","User-Agent":UA},body:JSON.stringify(seed)}).catch(()=>{})}catch(e){}}
+async function lazyMapping(id,s,e,pending=false){try{const q=pending?"&pending=1":"",u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(id)+"&tmdbId="+encodeURIComponent(id)+"&season="+s+"&episode="+e+q,d=await json(u,{headers:{Accept:"application/json","User-Agent":UA}},pending?7000:7500);if(!d||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=ints(m.mal_episode||m.target_episode);return mal&&ep?{malId:mal,malEpisode:ep,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[],source:d.source||"shared"}:null}catch(e){return null}}
 function pollLazyMapping(id,s,e,maxWait){
-  const delays=[250,500,1000,1500,2000];
-  const start=Date.now();
-  return new Promise(resolve=>{
-    let i=0;
-    const attempt=()=>{
-      if(i>=delays.length)return resolve(null);
-      if(Date.now()-start>=maxWait)return resolve(null);
-      const d=delays[i++];
-      setTimeout(()=>{
-        if(Date.now()-start>=maxWait)return resolve(null);
-        lazyMapping(id,s,e).then(r=>{
-          if(r&&r.malId&&r.malEpisode)return resolve(r);
-          attempt()
-        }).catch(()=>attempt())
-      },d)
-    };
-    attempt()
-  })
+ const delays=[250,500,1000,1500,2000],start=Date.now();
+ return new Promise(resolve=>{let i=0;const attempt=()=>{if(i>=delays.length||Date.now()-start>=maxWait)return resolve(null);const d=delays[i++];setTimeout(()=>{lazyMapping(id,s,e,true).then(r=>{if(r)return resolve(r);attempt()}).catch(()=>attempt())},d)};attempt()})
 }
 async function resolveTmdbId(id,type){id=String(id||"").trim();if(/^\d+$/.test(id)||!/^tt\d+$/i.test(id))return id;try{const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results",d=await json(TMDB_API+"/find/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&external_source=imdb_id",{headers:{"Accept":"application/json","User-Agent":UA}},2500);const a=d&&Array.isArray(d[t])?d[t]:[];return a[0]&&a[0].id?String(a[0].id):id}catch(e){return id}}
 async function tmdbInfo(id,type){try{const t=String(type||"tv").toLowerCase()==="movie"?"movie":"tv",d=await json(TMDB_API+"/"+t+"/"+encodeURIComponent(id)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&language=en-US",{headers:{"Accept":"application/json","User-Agent":UA}},2500);if(!d)return null;return{title:String(d.name||d.title||d.original_name||d.original_title||"").trim(),originalTitle:String(d.original_name||d.original_title||"").trim()}}catch(e){return null}}
-async function resolveMap(id,s,e){const lazy=await lazyMapping(id,s,e);if(lazy){log("Lazy mapper HIT TMDB="+id+" S"+s+"E"+e+" -> MAL="+lazy.malId+" E"+lazy.malEpisode);return lazy}const shinkro=await getMapping(id,s,e);if(shinkro){log("Shinkro mapper HIT TMDB="+id+" S"+s+"E"+e+" -> MAL="+shinkro.malId+" E"+shinkro.malEpisode);return shinkro}return null}
+async function resolveMap(id,s,e){return lazyMapping(id,s,e)}
 
 async function searchAnime(q){if(!q)return[];return memo("anikoto:search:"+String(q).toLowerCase(),MAP_TTL,async()=>{const d=await json(AJAX_URL+"/anime/search?keyword="+encodeURIComponent(q),{headers:HEADERS});const h=d&&d.result&&d.result.html;if(!h)return[];const root=parseHTML(h),box=first(root,"div.scaff.items"),out=[];if(!box)return out;for(const n of box.c){if(!n.a||!n.a.href)continue;const t=first(n,".name.d-title");if(t)out.push({title:nodeText(t),url:new URL(n.a.href,ANIKOTO_URL).href,image:(first(n,"img")||{a:{}}).a.src||""})}return out})}
 
@@ -97,8 +77,7 @@ function cleanStreamUrl(u){return String(u||"").replace(/\\/g,"").trim()}
 
 async function extractVidtube(u,server){const h=await text(u,{headers:HEADERS});if(!h)return[];const r=parseHTML(h),p=first(r,"#megaplay-player"),id=p&&val(p,"data-id");if(!id)return[];const z=new URL(u),parts=z.pathname.split("/").filter(Boolean),type=parts[parts.length-1];if(!type)return[];const d=await json("https://vidtube.site/stream/getSourcesNew?id="+encodeURIComponent(id)+"&type="+encodeURIComponent(type),{headers:{"X-Requested-With":"XMLHttpRequest","Referer":"https://vidtube.site/","Origin":"https://vidtube.site","User-Agent":UA}},10000);const playlist=d&&d.sources&&d.sources.file;if(!playlist)return[];const tr=Array.isArray(d&&d.tracks)?d.tracks:[];let sub=null;for(const x of tr)if(x&&x.kind==="captions"&&String(x.lang||"").toLowerCase()==="english"){sub=x.file;break}if(!sub)for(const x of tr)if(x&&x.kind==="captions"&&x.default===true){sub=x.file;break}sub=cleanStreamUrl(sub);return[{name:server||"vidtube",title:(server||"vidtube")+" [multi-quality]",url:cleanStreamUrl(playlist),quality:"multi-quality",headers:streamHeaders("https://vidtube.site/","https://vidtube.site"),subtitle:sub||"",subtitleFormat:sub?"vtt":"",subtitles:sub?[{url:sub,name:"English",language:"en",format:"vtt",default:true,headers:streamHeaders("https://vidtube.site/","https://vidtube.site")}]:[],backup:false}]}
 
-async function extractMegaplay(u,server){const h=await text(u,{headers:HEADERS});if(!h)return[];const r=parseHTML(h),p=first(r,"#megaplay-player"),id=p&&val(p,"data-id");if(!id)return[];const page=new URL(u);let source=null,file=null;for(const ep of["getSources","getSourcesNew"]){try{let q=page.origin+"/=asyncstream/"+ep+"?()=>id="+encodeURIComponent(id),sec=page.searchParams&&page.searchParams.get("s");if{
-(sec   )q+="&s="+encodeURIComponent(sec);const d=await json(q,{headers:{"X-Requested-With":"XMLHttpRequest","Referer":u,"Origin":page.origin,"User-Agent":UA,"Accept":"*/*"}},10000),f=sourceFile(d);if(f){source=d;file=cleanStreamUrl(f);break}}catch(e){log("Megaplay "+ep+" failed: "+e.message)}}if(!file||!source)return[];const tr=Array.isArray(source.tracks)?source.tracks:[];let en=null;for(const x of tr)if(x&&x.kind==="captions"&&String(x.label||"").toLowerCase()==="english"){en=x;break}if(!en)for(const x of tr)if(x&&x.kind==="captions"&&x.default===true){en=x;break}const sub=cleanStreamUrl(en&&en.file),fmt=sub?subFormat(sub,en&&en.format):"",signed=signMegaplay(file);log("Megaplay source resolved; signed playback URL generated");return[{name:server||"Megaplay",title:(server||"Megaplay")+" [multi-quality]",url:signed,_megaplayBase:file,quality:"multi-quality",headers:streamHeaders("https://megaplay.buzz/","https://megaplay.buzz/"),subtitle:sub||"",subtitleFormat:fmt,subtitles:sub?[{url:sub,name:"English",language:"en",format:fmt||"vtt",default:true,headers:streamHeaders("https://megaplay.buzz/","https://megaplay.buzz/")}]:[],backup:false}]}
+async function extractMegaplay(u,server){const h=await text(u,{headers:HEADERS});if(!h)return[];const r=parseHTML(h),p=first(r,"#megaplay-player"),id=p&&val(p,"data-id");if(!id)return[];const page=new URL(u);let source=null,file=null;for(const ep of["getSources","getSourcesNew"]){try{let q=page.origin+"/=asyncstream/"+ep+"?id="+encodeURIComponent(id),sec=page.searchParams&&page.searchParams.get("s");if(sec)q+="&s="+encodeURIComponent(sec);const d=await json(q,{headers:{"X-Requested-With":"XMLHttpRequest","Referer":u,"Origin":page.origin,"User-Agent":UA,"Accept":"*/*"}},10000),f=sourceFile(d);if(f){source=d;file=cleanStreamUrl(f);break}}catch(e){log("Megaplay "+ep+" failed: "+e.message)}}if(!file||!source)return[];const tr=Array.isArray(source.tracks)?source.tracks:[];let en=null;for(const x of tr)if(x&&x.kind==="captions"&&String(x.label||"").toLowerCase()==="english"){en=x;break}if(!en)for(const x of tr)if(x&&x.kind==="captions"&&x.default===true){en=x;break}const sub=cleanStreamUrl(en&&en.file),fmt=sub?subFormat(sub,en&&en.format):"",signed=signMegaplay(file);log("Megaplay source resolved; signed playback URL generated");return[{name:server||"Megaplay",title:(server||"Megaplay")+" [multi-quality]",url:signed,_megaplayBase:file,quality:"multi-quality",headers:streamHeaders("https://megaplay.buzz/","https://megaplay.buzz/"),subtitle:sub||"",subtitleFormat:fmt,subtitles:sub?[{url:sub,name:"English",language:"en",format:fmt||"vtt",default:true,headers:streamHeaders("https://megaplay.buzz/","https://megaplay.buzz/")}]:[],backup:false}]}
 
 async function extract(u,server){try{const h=new URL(u).hostname.toLowerCase().split(".")[0];if(h==="vidtube")return await extractVidtube(u,server);if(h==="megaplay")return await extractMegaplay(u,server);log("Unsupported extractor host: "+h);return[]}catch(e){log("Extractor "+(server||"unknown")+" failed: "+e.message);return[]}}
 
@@ -109,34 +88,29 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   const rawId=String(tmdbId||"").trim(),id=await resolveTmdbId(rawId,type),s=ints(season)||1,e=ints(episode)||1;
   if(!id)return[];
   const deadline=Date.now()+14500;
-  const mapped const tryOne=async m=>{
-      if(!m)return null;
-      const hit=await findEpisode(m);
-      if(!hit)return null;
-      const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
-      const out=await streamsForEpisode(hit.episode.episodeId,m.malId,m.malEpisode,dub);
-      return out&&out.length?out:null
-    };
-    const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
-    let m=await lazyMapping(id,mapSeason,mapEpisode),out=await tryOne(m);
-    if(out)return out;
-    if(m)log("Lazy mapped stream failed; trying Shinkro");
-    m=await getMapping(id,mapSeason,mapEpisode);out=await tryOne(m);
-    if(out)return out;
-    if(m)log("Shinkro mapped stream failed; trying original scraping");
-    if(!m){
-      try{
-        triggerPopulation({tmdb_id:id,season:mapSeason,episode:mapEpisode});
-        const polled=await pollLazyMapping(id,mapSeason,mapEpisode,6500);
-        if(polled){
-          log("Polled lazy mapping succeeded");
-          const out2=await tryOne(polled);
-          if(out2)return out2
-        }
-      }catch(e){log("Polling failed: "+(e&&e.message||e))}
-    }
-    return null
-  };
+  const mapped=async()=>{ const tryOne=async m=>{
+       if(!m)return null;
+       const hit=await findEpisode(m);
+       if(!hit)return null;
+       const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
+       const out=await streamsForEpisode(hit.episode.episodeId,m.malId,m.malEpisode,dub);
+       return out&&out.length?out:null
+     };
+     const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
+     let m=await lazyMapping(id,mapSeason,mapEpisode),out=await tryOne(m);
+     if(out)return out;
+     if(!m){
+       try{
+         const polled=await pollLazyMapping(id,mapSeason,mapEpisode,6500);
+         if(polled){
+           log("Polled unified mapping succeeded");
+           const out2=await tryOne(polled);
+           if(out2)return out2
+         }
+       }catch(e){log("Polling failed: "+(e&&e.message||e))}
+     }
+     return null
+   };
   try{
     const out=await timeout(mapped(),Math.min(9000,Math.max(500,deadline-Date.now())));
     if(out&&out.length)return out

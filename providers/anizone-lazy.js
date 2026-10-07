@@ -1,4 +1,4 @@
-const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",POPULATE_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-populate-background",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
+const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
 
 async function req(url,opt={},timeout=TIMEOUT){
   const o={...opt,headers:{...HEADERS,...(opt.headers||{})}};
@@ -318,21 +318,6 @@ async function dbMapping(tmdbId,season,episode){
   return null
 }
 
-async function fallbackMapping(tmdbId,season,episode){
-  tmdbId=String(tmdbId||"").trim();
-  season=Number(season)||1;
-  episode=Number(episode)||1;
-  if(!tmdbId)return null;
-  const u=MAPPING_URL+"?resolve=1&tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
-  const d=await json(u,{headers:{"Accept":"application/json"}},20000);
-  if(d&&d.ok&&d.mapping){
-    console.log("[AniZone Lazy] FALLBACK HIT",{tmdbId,season,episode,boundary:!!(d.state&&d.state.boundary)});
-    return{mapping:d.mapping,fromDb:false,state:d.state||null}
-  }
-  console.log("[AniZone Lazy] FALLBACK FAILED",{tmdbId,season,episode,status:d&&d.status});
-  return null
-}
-
 function pollLazyMapping(tmdbId,season,episode,maxWait){
   const delays=[250,500,1000,1500,2000];
   const start=Date.now();
@@ -344,28 +329,15 @@ function pollLazyMapping(tmdbId,season,episode,maxWait){
       const d=delays[i++];
       setTimeout(()=>{
         if(Date.now()-start>=maxWait)return resolve(null);
-        dbMapping(tmdbId,season,episode).then(r=>{
-          if(r&&r.mapping)return resolve(r);
+        const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&pending=1";
+        json(u,{headers:{"Accept":"application/json"}},8000).then(d=>{
+          if(d&&d.ok&&d.mapping)return resolve({mapping:d.mapping,fromDb:true,state:d.state||null});
           attempt()
         }).catch(()=>attempt())
       },d)
     };
     attempt()
   })
-}
-
-function triggerPopulation(seed){
-  if(!seed||!seed.tmdb_id)return;
-  try{
-    void fetch(POPULATE_URL,{
-      method:"POST",
-      headers:{...HEADERS,"Content-Type":"application/json","Accept":"application/json"},
-      body:JSON.stringify(seed)
-    }).then(r=>console.log("[AniZone Lazy] POPULATION",seed.tmdb_id,seed.season,seed.episode,r&&r.status))
-      .catch(e=>console.log("[AniZone Lazy] POPULATION FAILED",String(e)))
-  }catch(e){
-    console.log("[AniZone Lazy] POPULATION LAUNCH FAILED",String(e))
-  }
 }
 
 function mapTitle(m){
@@ -415,10 +387,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
 
   if(!movie){
     mappingResult=await dbMapping(tmdbId,season,episode);
-    if(!mappingResult)mappingResult=await fallbackMapping(tmdbId,season,episode);
     if(!mappingResult||!mappingResult.mapping){
-      console.log("[AniZone Lazy] NO MAPPING AVAILABLE, TRIGGERING POPULATION");
-      triggerPopulation({tmdb_id:tmdbId,season,episode});
       const polled=await pollLazyMapping(tmdbId,season,episode,8000);
       if(polled&&polled.mapping){
         console.log("[AniZone Lazy] POLL SUCCESS");
@@ -437,18 +406,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     malId=mapMalId(m);
     seasonName=String(m.season_name||m.seasonName||"");
 
-    if(!mappingResult.fromDb||mappingResult.state&&mappingResult.state.boundary){
-      console.log("[AniZone Lazy] POPULATION TRIGGER",{tmdbId,season,episode,boundary:!!(mappingResult.state&&mappingResult.state.boundary),fromDb:!!mappingResult.fromDb});
-      triggerPopulation({
-        tmdb_id:String(m.tmdb_id||m.tmdbId||tmdbId),
-        imdb_id:imdbId,
-        mal_id:malId,
-        title,
-        season,
-        episode,
-        mal_episode:malEpisode
-      })
-    }
+
   }else{
     const info=await getTmdbInfo(tmdbId,"movie");
     if(!info||!info.title){
