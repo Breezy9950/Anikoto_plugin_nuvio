@@ -130,11 +130,6 @@ async function inspectHls(url,headers,meta={}){
     explicitQuality(meta.title)
   );
 
-  /*
-   * Some current MegaPlay responses return a valid master playlist
-   * without exposing RESOLUTION in the fetched text. Do not reject
-   * a genuine HLS playlist merely because RESOLUTION is absent.
-   */
   if(max>=1080)return{url,max,master:true};
 
   if(max===0&&explicit>=1080)return{
@@ -151,11 +146,6 @@ async function inspectHls(url,headers,meta={}){
     }
   }
 
-  /*
-   * If the returned URL itself is an HLS URL and the server gave us
-   * a valid playlist, prefer it as Auto/1080 rather than throwing it
-   * away because the playlist omitted resolution metadata.
-   */
   if(max===0&&/\.m3u8(?:$|\?)/i.test(String(url))){
     return{
       url,
@@ -1696,30 +1686,30 @@ function decryptSource(enc){
  * Extract MAL ID / episode / language directly from the
  * AniSnatch server source.
  *
- * Example:
- *
- * megaplay/51290-sub/42897-5-1~2~3~4~5-en
+ * Accepts both:
+ *   megaplay/51290-sub/42897-5
+ *   megaplay/51290-sub/42897-5-1~2~3~4~5-en
  *
  * gives:
  *   provider = megaplay
  *   malId    = 42897
  *   episode  = 5
- *   language = en
+ *   lang     = en  (defaults to "en" when suffix absent)
  */
 function parseServerSource(source){
-  const s = String(source || "").trim();
+  const s=String(source||"").trim();
 
-  const m = /^(megaplay|vidwish|vidtube)\/[^/]+\/(\d+)-(\d+)(?:-[^-]*-([a-z]+))?$/i.exec(s);
+  const m=/^(megaplay|vidwish|vidtube)\/[^/]+\/(\d+)-(\d+)(?:-[^-]*-([a-z]+))?$/i.exec(s);
 
   if(!m)
     return null;
 
-  return {
-    provider: String(m[1]).toLowerCase(),
-    malId: String(m[2]),
-    episode: Number(m[3]),
-    lang: String(m[4] || "en").toLowerCase()
-  };
+  return{
+    provider:String(m[1]).toLowerCase(),
+    malId:String(m[2]),
+    episode:Number(m[3]),
+    lang:String(m[4]||"en").toLowerCase()
+  }
 }
 
 function directEmbedUrls(server){
@@ -1733,8 +1723,8 @@ function directEmbedUrls(server){
   const out=[];
 
   /*
-   * This is the current MegaPlay-style route:
-   * /stream/mal/{malId}/{episode}/{lang}
+   * MegaPlay's MAL-based stream route.
+   * Verified working: GET /stream/mal/{malId}/{episode}/{lang} -> 200
    */
   if(p.provider==="megaplay"){
     out.push(
@@ -1746,26 +1736,9 @@ function directEmbedUrls(server){
   }
 
   /*
-   * VidWish/VidTube may expose the same MAL-based
-   * stream route. Keep them as candidates.
+   * VidWish / VidTube /stream/mal/... routes currently 404.
+   * Removed to avoid wasted requests; re-enable if they come back.
    */
-  if(p.provider==="vidwish"){
-    out.push(
-      "https://vidwish.live/stream/mal/"+
-      encodeURIComponent(p.malId)+"/"+
-      encodeURIComponent(p.episode)+"/"+
-      encodeURIComponent(lang)
-    )
-  }
-
-  if(p.provider==="vidtube"){
-    out.push(
-      "https://vidtube.site/stream/mal/"+
-      encodeURIComponent(p.malId)+"/"+
-      encodeURIComponent(p.episode)+"/"+
-      encodeURIComponent(lang)
-    )
-  }
 
   return uniq(out)
 }
@@ -1817,30 +1790,38 @@ function extractStreamId(html){
   let m;
 
   /*
-   * Primary MegaPlay player markup.
+   * 1. Original attribute-based patterns (kept for compatibility)
    */
   m=/id=["']megaplay-player["'][^>]*data-id=["']([^"']+)["']/i.exec(h);
-
-  if(!m)
-    m=/data-id=["']([^"']+)["'][^>]*id=["']megaplay-player["']/i.exec(h);
-
-  /*
-   * Generic data-id.
-   */
-  if(!m)
-    m=/data-id=["']([^"']+)["']/i.exec(h);
+  if(!m)m=/data-id=["']([^"']+)["'][^>]*id=["']megaplay-player["']/i.exec(h);
+  if(!m)m=/data-realid=["']([^"']+)["']/i.exec(h);
+  if(!m)m=/data-video-id=["']([^"']+)["']/i.exec(h);
+  if(!m)m=/data-stream-id=["']([^"']+)["']/i.exec(h);
 
   /*
-   * Alternate player identifiers.
+   * 2. Any data-id anywhere (drop the "megaplay-player" requirement)
    */
-  if(!m)
-    m=/data-realid=["']([^"']+)["']/i.exec(h);
+  if(!m)m=/data-id=["']([^"']+)["']/i.exec(h);
 
-  if(!m)
-    m=/data-video-id=["']([^"']+)["']/i.exec(h);
+  /*
+   * 3. /stream/s-N/{id} path style
+   */
+  if(!m)m=/\/stream\/s-\d+\/([A-Za-z0-9_-]+)/i.exec(h);
 
-  if(!m)
-    m=/data-stream-id=["']([^"']+)["']/i.exec(h);
+  /*
+   * 4. JS variables assigned in inline scripts
+   */
+  if(!m)m=/\b(?:dataId|data_id|streamId|stream_id|videoId|video_id|sourceId|source_id)\s*[:=]\s*["']([A-Za-z0-9_-]{4,})["']/i.exec(h);
+
+  /*
+   * 5. JSON-ish quoted keys with a value
+   */
+  if(!m)m=/"(?:dataId|data_id|streamId|stream_id|videoId|video_id)"\s*:\s*"([^"]+)"/i.exec(h);
+
+  /*
+   * 6. UUID-looking token (last resort)
+   */
+  if(!m)m=/\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i.exec(h);
 
   if(m){
     const id=String(m[1]||"").trim();
@@ -1848,22 +1829,6 @@ function extractStreamId(html){
     if(id)
       return id
   }
-
-  /*
-   * stream/s-N/... style routes.
-   */
-  m=/\/stream\/s-\d+\/([^/?#"']+)/i.exec(h);
-
-  if(m)
-    return String(m[1]).trim();
-
-  /*
-   * JSON-style escaped player IDs.
-   */
-  m=/"(?:dataId|data_id|streamId|stream_id|videoId|video_id)"\s*:\s*["']?([^,"'}\s]+)["']?/i.exec(h);
-
-  if(m)
-    return String(m[1]).trim();
 
   return null
 }
@@ -2151,9 +2116,6 @@ async function resolveExternal(server){
       ""
     ).trim();
 
-   console.log("[AniSnatch] raw source =", source);
-  console.log("[AniSnatch] parse =", parseServerSource(source));
-
   const host=
     hostForSource(source);
 
@@ -2180,24 +2142,6 @@ async function resolveExternal(server){
    * ------------------------------------------------------------
    * PATH 1 — DIRECT MAL EMBED
    * ------------------------------------------------------------
-   *
-   * This is the important fix.
-   *
-   * Example:
-   *
-   * megaplay/51290-sub/42897-5-1~2~3~4~5-en
-   *
-   * becomes:
-   *
-   * https://megaplay.buzz/stream/mal/42897/5/en
-   *
-   * The MegaPlay page exposes:
-   *
-   * id="megaplay-player" data-id="..."
-   *
-   * and that ID is sent to:
-   *
-   * /stream/getSources?id=...
    */
   const directUrls=directEmbedUrls(server);
 
@@ -2235,6 +2179,19 @@ async function resolveExternal(server){
     log(
       `direct embed HTML chars=${embedHtml.length}`
     );
+
+    /*
+     * DIAG — remove after the extractor is confirmed working.
+     */
+    try{
+      const ids=(embedHtml.match(/id=["'][^"']+["']/gi)||[]).slice(0,20);
+      const dataAttrs=(embedHtml.match(/data-[a-z0-9-]+=["'][^"']+["']/gi)||[]).slice(0,20);
+      const scripts=(embedHtml.match(/<script[^>]*>[\s\S]{0,200}/gi)||[]).slice(0,5);
+
+      log("DIAG ids="+ids.join(" | "));
+      log("DIAG data="+dataAttrs.join(" | "));
+      log("DIAG scripts="+scripts.map(s=>s.slice(0,180).replace(/\s+/g," ")).join(" || "));
+    }catch(e){}
 
     let streamId=
       extractStreamId(embedHtml);
@@ -2313,12 +2270,8 @@ async function resolveExternal(server){
 
   /*
    * ------------------------------------------------------------
-   * PATH 2 — ANI-SNATCH VIDEO WRAPPER
+   * PATH 2 — ANI-SNATCH VIDEO WRAPPER (fallback)
    * ------------------------------------------------------------
-   *
-   * Keep the old AniSnatch video-page path as a
-   * fallback. This protects against sources whose
-   * direct MAL route is unavailable.
    */
   const page=
     pageForSource(source);
@@ -2380,10 +2333,6 @@ async function resolveExternal(server){
     )
       continue;
 
-    /*
-     * If this URL is already a source endpoint,
-     * try extracting an ID from its path.
-     */
     const streamPath=
       /\/stream\/[^/]+\/([^/?#]+)/i.exec(
         nestedUrl
@@ -2394,10 +2343,6 @@ async function resolveExternal(server){
         streamPath[1]
       ).trim();
 
-    /*
-     * If it is a player page, fetch it and
-     * inspect its player markup.
-     */
     if(!streamId){
       const nestedHtml=await text(
         nestedUrl,
