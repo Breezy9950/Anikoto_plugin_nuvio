@@ -40,7 +40,7 @@ function rank(rs,titles){const ts=uniq(titles).map(norm).filter(Boolean);return 
 
 async function episodes(animeUrl){return memo("anikoto:episodes:"+animeUrl,SERVER_TTL,async()=>{const h=await text(animeUrl,{headers:HEADERS});if(!h)return null;const r=parseHTML(h),w=first(r,"#watch-main"),id=w&&val(w,"data-id");if(!id)return null;const d=await json(AJAX_URL+"/episode/list/"+encodeURIComponent(id)+"?vrf=",{headers:HEADERS});const eh=d&&d.result;if(!eh)return null;const er=parseHTML(eh),out=[];for(const a of all(er,"a")){const id=val(a,"data-ids"),num=ints(val(a,"data-num"));if(!num)continue;out.push({episodeId:id,href:val(a,"href"),malId:val(a,"data-mal")||null,episodeNumber:num,title:val(a,"title"),dub:val(a,"data-dub")==="1",filler:hasClass(a,"filler")})}return out})}
 
-async function findEpisode(m){const qs=uniq([m.title,...m.titles]),allr=[];const searchResults=await settled(qs.map(q=>()=>searchAnime(q)),EXTRACT_TIMEOUT);for(const r of searchResults)for(const x of r||[])if(!allr.some(y=>y.url===x.url))allr.push(x);const candidates=rank(allr,qs).slice(0,10),checks=await settled(candidates.map(c=>async()=>{const es=await episodes(c.url);if(!es)return null;const e=es.find(x=>(m.malId?x.malId===m.malId&&x.episodeNumber===m.malEpisode:x.episodeNumber===m.malEpisode)&&x.episodeId);return e?{candidate:c,episode:e,episodes:es}:null}),EXTRACT_TIMEOUT);return checks.find(Boolean)||null}
+async function findEpisode(m){const qs=uniq([m.title,...m.titles]),allr=[];const searchResults=await settled(qs.map(q=>()=>searchAnime(q)),EXTRACT_TIMEOUT);for(const r of searchResults)for(const x of r||[])if(!allr.some(y=>y.url===x.url))allr.push(x);const candidates=rank(allr,qs).slice(0,10);if(!candidates.length)return null;const run=async c=>{const es=await episodes(c.url);if(!es)return null;const e=es.find(x=>(m.malId?x.malId===m.malId&&x.episodeNumber===m.malEpisode:x.episodeNumber===m.malEpisode)&&x.episodeId);return e?{candidate:c,episode:e,episodes:es}:null};for(let i=0;i<candidates.length;i+=3){const batch=candidates.slice(i,i+3),hits=await settled(batch.map(c=>()=>run(c)),EXTRACT_TIMEOUT);const hit=hits.find(Boolean);if(hit)return hit}return null}
 
 async function kiwi(mal,ep){const u=MAPPER_URL+"/api/mal/"+encodeURIComponent(mal)+"/"+encodeURIComponent(ep)+"/"+Math.floor(Date.now()/1000),d=await json(u,{headers:HEADERS});return d&&d["Kiwi-Stream-"]||null}
 
@@ -81,52 +81,79 @@ async function extractMegaplay(u,server){const h=await text(u,{headers:HEADERS})
 
 async function extract(u,server){try{const h=new URL(u).hostname.toLowerCase().split(".")[0];if(h==="vidtube")return await extractVidtube(u,server);if(h==="megaplay")return await extractMegaplay(u,server);log("Unsupported extractor host: "+h);return[]}catch(e){log("Extractor "+(server||"unknown")+" failed: "+e.message);return[]}}
 
-async function streamsForEpisode(id,mal,ep,dub){const key="anikoto:streams:"+id+":"+(dub?1:0),hit=CACHE.get(key);if(hit!==undefined){const v=await hit;return v.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)}const p=(async()=>{const kp=mal?kiwi(mal,ep).catch(()=>null):Promise.resolve(null),servers=await serverLinks(id,dub),kd=await kp;if(kd&&kd.sub&&kd.sub.url)servers.push({name:"Kiwi",linkId:String(kd.sub.url),groupName:"Kiwi"});if(!servers.length)return[];const urls=await settled(servers.map(s=>async()=>{try{const u=await serverUrl(s.linkId);return u?{s,u}:null}catch(e){log("Server URL "+s.name+" failed: "+e.message);return null}}),EXTRACT_TIMEOUT),extracted=await settled(urls.map(x=>async()=>{if(!x)return[];try{return await extract(x.u,x.s.name)}catch(e){log("Server "+x.s.name+" failed: "+e.message);return[]}}),EXTRACT_TIMEOUT),out=[];for(const got of extracted){for(const item of got||[]){if(item&&item._megaplayBase)item.url=item._megaplayBase;out.push(item)}}return out})();CACHE.set(key,p,STREAM_TTL);try{const out=await p;CACHE.set(key,out,STREAM_TTL);return out.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)}catch(e){CACHE.delete(key);throw e}}
+async function streamsForEpisode(id,mal,ep,dub){
+  const key="anikoto:streams:"+id+":"+(dub?1:0),hit=CACHE.get(key);
+  if(hit!==undefined){
+    const v=await hit;
+    return v.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)
+  }
+  const p=(async()=>{
+    const kp=mal?kiwi(mal,ep).catch(()=>null):Promise.resolve(null);
+    const servers=await serverLinks(id,dub);
+    const kd=await kp;
+    if(kd&&kd.sub&&kd.sub.url)servers.push({name:"Kiwi",linkId:String(kd.sub.url),groupName:"Kiwi"});
+    if(!servers.length)return[];
+    return await new Promise(resolve=>{
+      let pending=servers.length,done=false;
+      const finish=v=>{if(done)return;done=true;resolve(v||[])};
+      const timer=setTimeout(()=>finish([]),EXTRACT_TIMEOUT+250);
+      for(const server of servers){
+        (async()=>{
+          try{
+            const u=await serverUrl(server.linkId);
+            if(!u)return;
+            const got=await timeout(extract(u,server.name),EXTRACT_TIMEOUT);
+            if(got&&got.length){clearTimeout(timer);finish(got)}
+          }catch(e){log("Server "+server.name+" failed: "+e.message)}
+          finally{pending--;if(!pending){clearTimeout(timer);finish([])}}
+        })();
+      }
+    });
+  })();
+  CACHE.set(key,p,STREAM_TTL);
+  try{
+    const out=await p;
+    CACHE.set(key,out,STREAM_TTL);
+    return out.map(x=>x&&x._megaplayBase?Object.assign({},x,{url:signMegaplay(x._megaplayBase)}):x)
+  }catch(e){CACHE.delete(key);throw e}
+}
 
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   const type=String(mediaType||"tv").toLowerCase();
   const rawId=String(tmdbId||"").trim(),id=await resolveTmdbId(rawId,type),s=ints(season)||1,e=ints(episode)||1;
   if(!id)return[];
-  const deadline=Date.now()+14500;
-  const mapped=async()=>{ const tryOne=async m=>{
-       if(!m)return null;
-       const hit=await findEpisode(m);
-       if(!hit)return null;
-       const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
-       const out=await streamsForEpisode(hit.episode.episodeId,m.malId,m.malEpisode,dub);
-       return out&&out.length?out:null
-     };
-     const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
-     let m=await lazyMapping(id,mapSeason,mapEpisode),out=await tryOne(m);
-     if(out)return out;
-     if(!m){
-       try{
-         const polled=await pollLazyMapping(id,mapSeason,mapEpisode,6500);
-         if(polled){
-           log("Polled unified mapping succeeded");
-           const out2=await tryOne(polled);
-           if(out2)return out2
-         }
-       }catch(e){log("Polling failed: "+(e&&e.message||e))}
-     }
-     return null
-   };
-  try{
-    const out=await timeout(mapped(),Math.min(9000,Math.max(500,deadline-Date.now())));
-    if(out&&out.length)return out
-  }catch(e){log("Mapped path failed: "+e.message)}
-  const fallback=async()=>{
-    const info=await tmdbInfo(id,type);
+  const deadline=Date.now()+14500,dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
+  const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
+  const mappingPromise=lazyMapping(id,mapSeason,mapEpisode);
+  const infoPromise=tmdbInfo(id,type);
+  const tryMapped=async m=>{
+    if(!m)return null;
+    const hit=await findEpisode(m);
+    if(!hit)return null;
+    const out=await streamsForEpisode(hit.episode.episodeId,m.malId,m.malEpisode,dub);
+    return out&&out.length?out:null;
+  };
+  const fallbackWithInfo=async()=>{
+    const info=await infoPromise;
     if(!info||!info.title)return[];
     const title=info.title,titles=info.originalTitle&&norm(info.originalTitle)!==norm(title)?[info.originalTitle]:[];
     const fm={malId:"",malEpisode:type==="movie"?1:e,title,titles:uniq(titles)};
     const hit=await findEpisode(fm);
     if(!hit){log("Original AniKoto fallback episode not found for "+title);return[]}
-    const dub=typeof settings==="boolean"?settings:!!(settings&&settings.dub);
     const out=await streamsForEpisode(hit.episode.episodeId,"",hit.episode.episodeNumber,dub);
     log("Original AniKoto fallback streams: "+out.length);
-    return out||[]
+    return out||[];
   };
-  try{return await timeout(fallback(),Math.max(100,deadline-Date.now()))}catch(e){log("AniKoto deadline reached: "+e.message);return[]}
+  try{
+    const m=await Promise.race([mappingPromise,new Promise(resolve=>setTimeout(()=>resolve(null),1800))]);
+    if(m){
+      const out=await timeout(tryMapped(m),Math.min(11000,Math.max(100,deadline-Date.now())));
+      if(out&&out.length)return out;
+      log("Unified mapping found but AniKoto mapped stream path returned no streams");
+    }else{
+      log("Unified mapping not ready; using AniKoto directly while lazy population continues");
+    }
+  }catch(e){log("Mapped AniKoto path failed: "+e.message)}
+  try{return await timeout(fallbackWithInfo(),Math.max(100,deadline-Date.now()))}catch(e){log("AniKoto deadline reached: "+e.message);return[]}
 }
 module.exports={getStreams};
