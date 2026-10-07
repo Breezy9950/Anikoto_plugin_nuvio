@@ -11,7 +11,7 @@ const TIMEOUT=12000,SOURCE_TIMEOUT=8000,HLS_TIMEOUT=5000;
 function log(x){console.log("[AniSnatch] "+x)}
 
 async function req(url,opt={},timeout=TIMEOUT){
-  const o={...opt,credentials:"include",headers:{...((opt&&opt.headers)||{}),"User-Agent":UA}};
+  const o={...opt,headers:{...((opt&&opt.headers)||{}),"User-Agent":UA}};
   if(typeof AbortController!=="function"||typeof setTimeout!=="function")return fetch(url,o);
   const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);
   try{return await fetch(url,{...o,signal:c.signal})}finally{clearTimeout(t)}
@@ -88,18 +88,6 @@ function cleanUrl(u){
   return String(u||"").replace(/&amp;/g,"&").trim()
 }
 
-function isDub(s){
-  return/\b(?:dub|dubbed|dual[\s-]*audio|multi[\s-]*audio|hindi[\s-]*dub|spanish[\s-]*dub|english[\s-]*dub|german[\s-]*dub)\b/i.test(String(s||""))
-}
-
-function isSoft(s){
-  return/\bsoft[\s-]*sub(?:bed)?\b|selectable[\s-]+subtitle|subtitle[\s-]+track/i.test(String(s||""))
-}
-
-function isHardCategory(s){
-  return/^(?:hardsub|hard-sub|hsub|h[\s-]?sub)$/i.test(String(s||"").trim())
-}
-
 function explicitQuality(v){
   const s=String(v||"").toLowerCase();
   const m=s.match(/(?:2160|1440|1080|720|480|360|240)\s*p?/);
@@ -130,28 +118,21 @@ async function inspectHls(url,headers,meta={}){
     explicitQuality(meta.title)
   );
 
-  if(max>=1080)return{url,max,master:true};
+  /*
+   * Accept any master playlist with at least one variant. Do NOT
+   * require 1080p — MegaPlay frequently returns 720p-only masters,
+   * and rejecting them silently discards valid streams.
+   */
+  if(max>0)return{url,max,master:true};
 
-  if(max===0&&explicit>=1080)return{
-    url,
-    max:explicit,
-    master:false
-  };
+  if(explicit>0)return{url,max:explicit,master:false};
 
-  if(max===0&&/^#EXTM3U/i.test(String(h).trim())){
-    return{
-      url,
-      max:1080,
-      master:true
-    }
+  if(/^#EXTM3U/i.test(String(h).trim())){
+    return{url,max:explicit||1080,master:true}
   }
 
-  if(max===0&&/\.m3u8(?:$|\?)/i.test(String(url))){
-    return{
-      url,
-      max:1080,
-      master:true
-    }
+  if(/\.m3u8(?:$|\?)/i.test(String(url))){
+    return{url,max:explicit||1080,master:true}
   }
 
   return null
@@ -554,18 +535,23 @@ function utf8enc(s){
   return new Uint8Array(a)
 }
 
+/*
+ * SHA-256 round constants (NIST FIPS 180-4). The previous table had
+ * scrambled entries around index 7-15 and duplicated values at 46+,
+ * which produced an incorrect HMAC and invalid signed URLs.
+ */
 const SHA_K=[
-1116352408,1899447441,3049323471,3921009573,961987163,1508970993,
-2453635748,1426881987,3835390401,4022224774,264347078,604807628,
-770255983,1249150122,1555081692,1996064986,2554220882,2821834349,
-2952996808,3210313671,3336571891,3584528711,113926993,338241895,
-666307205,773529912,1294757372,1396182291,1695183700,2177026350,
-2456956037,2730485921,2820302411,3259730800,3345764771,3516065817,
-3600352804,4094571909,275423344,430227734,506948616,659060556,
-883997877,958139571,1322822218,1537002063,1996064986,2024104815,
-2227730452,2361852424,275423344,430227734,506948616,659060556,
-883997877,958139571,1322822218,1537002063,1996064986,2024104815,
-2227730452,2361852424,275423344,430227734
+  1116352408,1899447441,3049323471,3921009573,961987163,1508970993,
+  2453635748,2870763221,3624379352,310522625,606847678,1426881987,
+  1925270676,2161658366,2615561383,3248194932,3835390401,4022224774,
+  264347078,604807628,770255983,1249150122,1555081692,1996064986,
+  2554220882,2821834349,2952996808,3210313671,3336571891,3584528711,
+  113926993,338241895,666307205,773529912,1294757372,1396182291,
+  1695183700,1986661051,2177026350,2456956037,2730485921,2820302411,
+  3259730800,3345764771,3516065817,3600352804,4094571909,275423344,
+  430227734,506948616,659060556,883997877,958139571,1322822218,
+  1537002063,1747873779,1955562222,2024104815,2227730452,2361852424,
+  2428436474,2756734187,3204031479,3329325298
 ];
 
 const SHA_H=[
@@ -1579,10 +1565,10 @@ function signAniSnatchUrl(url){
 }
 
 /*
- * CDN proxy map. Ported from the original Kotlin extractor's
- * proxyAniSnatchHost(). Any playback URL pointing at a vault-*.uwucdn.top
- * or vibeplayer.site host must be rewritten before the player sees it,
- * otherwise the CDN returns 403.
+ * CDN proxy map, ported from the original Kotlin extractor's
+ * proxyAniSnatchHost(). Any playback URL pointing at a
+ * vault-*.uwucdn.top or vibeplayer.site host must be rewritten
+ * before the player sees it, otherwise the CDN returns 403.
  */
 const PROXY_MAP={
   "vibeplayer.site":"nanobyte.bigdreamsmalldih.site",
@@ -1780,10 +1766,7 @@ function sourceTracks(r,headers){
   if(!r||typeof r!=="object")
     return subtitles;
 
-  const tracks=
-    Array.isArray(r.tracks)?
-    r.tracks:
-    [];
+  const tracks=Array.isArray(r.tracks)?r.tracks:[];
 
   for(const t of tracks){
     if(!t||typeof t!=="object")
@@ -1842,11 +1825,7 @@ async function resolveSourceResponse(
      * Do NOT encodeURIComponent the streamId — the server expects
      * raw slashes in the id query value (verified with curl).
      */
-    const u=
-      host+
-      ep+
-      "?id="+
-      streamId;
+    const u=host+ep+"?id="+streamId;
 
     log(`extractor ${u}`);
 
@@ -1932,8 +1911,7 @@ async function resolveExternal(server){
    *
    * The stream ID is the malId/episode/lang triple taken
    * directly from the AniSnatch source string. No HTML fetch
-   * is required. This matches the URL shape the site itself
-   * uses and the endpoints that respond 200 to curl:
+   * is required. Matches the URL shape the site itself uses:
    *
    *   /stream/getSources?id=42897/5/en
    *   /stream/getSources?id=42897-5-en
