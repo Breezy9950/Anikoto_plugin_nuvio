@@ -389,6 +389,23 @@ async function processServer(server, idx, isMovie, season, episode, clean, durat
 // ============ Main entry (DIAGNOSTIC MODE) ============
 
 async function getStreams(tmdbId, type, season, episode) {
+  const diag = [];
+  const TEST = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+  const push = (label, detail) => {
+    diag.push({
+      name: label + (detail ? ' :: ' + String(detail).slice(0, 500) : ''),
+      title: label,
+      size: label,
+      description: String(detail || '').slice(0, 500),
+      url: TEST,
+      quality: '1080p',
+      language: 'en',
+      headers: {},
+      subtitles: [],
+      provider: 'VidSrc-DIAG'
+    });
+  };
+
   try {
     const isMovie = type === 'movie';
     const embedUrl = isMovie
@@ -396,89 +413,80 @@ async function getStreams(tmdbId, type, season, episode) {
       : `https://vidsrc.me/embed/tv/${tmdbId}/${season || 1}-${episode || 1}`;
 
     const embedRes = await safeFetch(embedUrl, {}, T_EMBED);
-
-    // Update BASEDOM from redirect
-    try {
-      const finalOrigin = new URL(embedRes.url).origin;
-      if (finalOrigin !== BASEDOM) BASEDOM = finalOrigin;
-    } catch (_) {}
-
+    const finalUrl = embedRes.url || embedUrl;
+    let origin = 'https://vidsrc.sh';
+    try { origin = new URL(finalUrl).origin; BASEDOM = origin; } catch (_) {}
     const html = await embedRes.text();
 
-    // ---- DIAGNOSTIC: return structural findings as fake streams ----
-    const diagnostics = [];
+    push('A-final', finalUrl);
+    push('B-origin', origin);
 
-    // 1. Any element with "server" in class or id
-    const serverRefs = html.match(/[^>]*(?:class|id)="[^"]*server[^"]*"[^>]*/gi) || [];
-    diagnostics.push({
-      name: `DIAG: server-refs found=${serverRefs.length}`,
-      url: 'https://diag/' + serverRefs.length
-    });
-    serverRefs.slice(0, 10).forEach((ref, i) => {
-      diagnostics.push({ name: `server-ref-${i}: ${ref.slice(0, 300)}`, url: 'https://diag/ref' + i });
-    });
+    const apiMatch = html.match(/data-api="([^"]+)"/);
+    if (!apiMatch) { push('C-no-data-api', html.slice(0, 400)); return diag; }
+    const apiPath = apiMatch[1].replace(/&amp;/g, '&');
+    push('C-api-path', apiPath);
 
-    // 2. Any data-hash / data-id attributes
-    const hashRefs = html.match(/data-(?:hash|id)="[^"]*"/gi) || [];
-    diagnostics.push({ name: `DIAG: hash-refs found=${hashRefs.length}`, url: 'https://diag/hashes' });
-    hashRefs.slice(0, 10).forEach((h, i) => {
-      diagnostics.push({ name: `hash-${i}: ${h}`, url: 'https://diag/h' + i });
-    });
+    const apiUrl = origin + apiPath;
+    push('D-api-url', apiUrl);
 
-    // 3. Any iframe tags
-    const iframes = html.match(/<iframe[^>]*>/gi) || [];
-    diagnostics.push({ name: `DIAG: iframes found=${iframes.length}`, url: 'https://diag/iframes' });
-    iframes.slice(0, 5).forEach((f, i) => {
-      diagnostics.push({ name: `iframe-${i}: ${f.slice(0, 300)}`, url: 'https://diag/if' + i });
-    });
+    const apiRes = await safeFetch(apiUrl, {
+      headers: {
+        'Referer': finalUrl,
+        'User-Agent': UA,
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8'
+      }
+    }, T_EMBED);
 
-    // 4. Any <script src="..."> tags
-    const scripts = html.match(/<script[^>]*src="[^"]*"[^>]*>/gi) || [];
-    diagnostics.push({ name: `DIAG: external-scripts found=${scripts.length}`, url: 'https://diag/scripts' });
-    scripts.slice(0, 10).forEach((s, i) => {
-      diagnostics.push({ name: `script-${i}: ${s.slice(0, 200)}`, url: 'https://diag/s' + i });
-    });
+    push('E-api-status', apiRes.status + ' ' + apiRes.statusText);
+    push('F-api-final-url', apiRes.url);
 
-    // 5. First 3000 chars of the raw HTML (so you can eyeball it)
-    diagnostics.push({ name: 'HTML-HEAD: ' + html.slice(0, 3000), url: 'https://diag/head' });
+    const body = await apiRes.text();
+    push('G-api-len', body.length);
 
-    // 6. Look for common vidsrc JS variables
-    const jsVars = html.match(/(?:var|let|const)\s+\w+\s*=\s*(?:\[|\{)[^;]{0,500}/g) || [];
-    diagnostics.push({ name: `DIAG: js-vars found=${jsVars.length}`, url: 'https://diag/jsvars' });
-    jsVars.slice(0, 5).forEach((v, i) => {
-      diagnostics.push({ name: `jsvar-${i}: ${v.slice(0, 300)}`, url: 'https://diag/jv' + i });
-    });
+    // Chunk the body so Nuvio can display all of it
+    for (let i = 0; i < body.length && i < 4000; i += 500) {
+      push('H-body-' + (i / 500), body.slice(i, i + 500));
+    }
 
-    // Return as fake streams so Nuvio displays them
-    const results = diagnostics.map(d => ({
-      name: d.name,
-      title: d.name,
-      size: d.name,
-      description: d.name,
-      url: d.url,
-      quality: '',
-      language: '',
-      headers: {},
-      subtitles: [],
-      provider: 'VidSrc-DIAG'
-    }));
+    // Common patterns to look for in the response
+    const ifr = body.match(/<iframe[^>]*src="([^"]+)"/i);
+    push('I-api-iframe', ifr ? ifr[1] : 'none');
 
-    console.log('[VidSrc-DIAG] Total diagnostics: ' + results.length);
-    return results;
+    const srcM = body.match(/src:\s*['"]([^'"]+)['"]/);
+    push('J-api-src', srcM ? srcM[1] : 'none');
 
+    const fileM = body.match(/file:\s*['"]([^'"]+)['"]/);
+    push('K-api-file', fileM ? fileM[1] : 'none');
+
+    const m3u8M = body.match(/(https?:[^\s"'<>\\]+\.m3u8[^\s"'<>\\]*)/);
+    push('L-api-m3u8', m3u8M ? m3u8M[1] : 'none');
+
+    const mp4M = body.match(/(https?:[^\s"'<>\\]+\.mp4[^\s"'<>\\]*)/);
+    push('M-api-mp4', mp4M ? mp4M[1] : 'none');
+
+    const rcpM = body.match(/(https?:[^\s"'<>\\]*\/rcp\/[^\s"'<>\\]*)/);
+    push('N-api-rcp', rcpM ? rcpM[1] : 'none');
+
+    const prorcpM = body.match(/(https?:[^\s"'<>\\]*\/prorcp\/[^\s"'<>\\]*)/);
+    push('O-api-prorcp', prorcpM ? prorcpM[1] : 'none');
+
+    const dataHashM = body.match(/data-hash="([^"]+)"/);
+    push('P-data-hash', dataHashM ? dataHashM[1] : 'none');
+
+    const dataIdM = body.match(/data-id="([^"]+)"/);
+    push('Q-data-id', dataIdM ? dataIdM[1] : 'none');
+
+    const scripts = body.match(/<script[^>]*src="([^"]+)"/gi) || [];
+    scripts.slice(0, 5).forEach((s, i) => push('R-script-' + i, s));
+
+    const redirect = body.match(/window\.location(?:\.href)?\s*=\s*['"]([^'"]+)/);
+    push('S-redirect', redirect ? redirect[1] : 'none');
+
+    return diag;
   } catch (e) {
-    return [{
-      name: 'DIAG-ERROR: ' + e.message,
-      title: 'DIAG-ERROR: ' + e.message,
-      size: 'DIAG-ERROR',
-      description: 'DIAG-ERROR',
-      url: 'https://diag/error',
-      quality: '',
-      language: '',
-      headers: {},
-      subtitles: [],
-      provider: 'VidSrc-DIAG'
-    }];
+    push('Z-ERROR', e.message + ' | ' + (e.stack || '').slice(0, 300));
+    return diag;
   }
 }
+
 module.exports = { getStreams };
