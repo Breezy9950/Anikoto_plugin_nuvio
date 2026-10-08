@@ -132,7 +132,7 @@ function parseHTML(html){
 }
 function all(root,selector){
   const out=[],sel=String(selector||"").trim();
-  const am=sel.match(/^\[([^=\]]+)\]$/);
+  const am=sel.match(/^$begin:math:display$\(\[\^\=$end:math:display$]+)\]$/);
   if(am){
     const key=am[1].toLowerCase();
     (function visitAttr(n){
@@ -159,7 +159,7 @@ function all(root,selector){
   return out
 }
 function first(root,selector){return all(root,selector)[0]||null}
-function attr(n,k){return n&&n.attrs?String(n.attrs[String(k).toLowerCase()]||""): ""}
+function attr(n,k){return n&&n.attrs?String(n.attrs[String(k).toLowerCase()]||""):""}
 function nodeText(n){
   if(!n)return"";
   if(n.tag==="#text")return n.text||"";
@@ -233,24 +233,42 @@ function cardScore(card,targets,base,season){
   }else if(season===1&&/\b(?:season|saison)\s*\d+\b/i.test(card.name))best-=700;
   return best
 }
+
+/* ---------- FIXED SEARCH PARSER ---------- */
 function parseSearchCards(html){
   const root=parseHTML(html),container=first(root,"div.scaff.items");
   if(!container)return[];
-  const direct=directChildren(container);
-  const pool=direct.length?direct:all(container,"a");
-  const out=[],seen=new Set();
-  for(const item of pool){
-    const href=attr(item,"href");
+  const direct=directChildren(container),out=[],seen=new Set();
+  for(const item of direct){
+    let card=item,href=attr(card,"href");
+    if(!href){
+      const a=first(card,"a");
+      if(!a)continue;
+      href=attr(a,"href");
+    }
     if(!href||seen.has(href))continue;
-    const titleNode=first(item,".name.d-title");
-    const name=decodeEntities(nodeText(titleNode||item)).replace(/\s+/g," ").trim();
+    const titleNode=first(card,".name.d-title");
+    const name=decodeEntities(nodeText(titleNode||card)).replace(/\s+/g," ").trim();
     if(!name)continue;
-    const img=first(item,"img");
+    const img=first(card,"img");
     seen.add(href);
     out.push({name,href,img:attr(img,"src")||""})
   }
+  if(!out.length){
+    for(const a of all(container,"a")){
+      const href=attr(a,"href");
+      if(!href||seen.has(href))continue;
+      const titleNode=first(a,".name.d-title");
+      const name=decodeEntities(nodeText(titleNode||a)).replace(/\s+/g," ").trim();
+      if(!name)continue;
+      const img=first(a,"img");
+      seen.add(href);
+      out.push({name,href,img:attr(img,"src")||""})
+    }
+  }
   return out
 }
+
 async function search(query){
   const q=String(query||"").trim();
   if(!q)return[];
@@ -276,7 +294,11 @@ function absoluteUrl(href){
 async function findAnime(mapping,season){
   const rawQueries=[mapping.title,...mapping.titles].filter(Boolean);
   const queries=[];
-  for(const q of rawQueries){queries.push(String(q));const b=searchTitleBase(q);if(b&&b!==q)queries.push(b)}
+  for(const q of rawQueries){
+    queries.push(String(q));
+    const b=searchTitleBase(q);
+    if(b&&b!==q)queries.push(b)
+  }
   const unique=[...new Set(queries.map(x=>x.trim()).filter(Boolean))];
   if(!unique.length)return null;
   const allCards=[];
@@ -361,346 +383,426 @@ async function getServerList(episodeId){
     return out
   })
 }
+async function getServerUrl(linkId){
+  const d=await getJson(AJAX+"/server?get="+encodeURIComponent(linkId),{headers:AJAX_HEADERS},5000);
+  return String(d&&d.result&&d.result.url||"").trim()
+}
 
-/* ---------- Source-compatible crypto: AES-256-CBC + HMAC-SHA256 ---------- */
-function utf8Bytes(s){
-  const str=String(s||""),out=[];
-  for(let i=0;i<str.length;i++){
-    let c=str.charCodeAt(i);
-    if(c>=0xD800&&c<=0xDBFF&&i+1<str.length){
-      const d=str.charCodeAt(++i);
-      if(d>=0xDC00&&d<=0xDFFF)c=0x10000+((c-0xD800)<<10)+(d-0xDC00)
-      else{i--;c=0xFFFD}
+/* ---------- Base64 / UTF-8 ---------- */
+function b64dec(s){
+  s=String(s||"").replace(/-/g,"+").replace(/_/g,"/");
+  s+="=".repeat((4-s.length%4)%4);
+  const abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",o=[];
+  let bits=0,v=0;
+  for(let i=0;i<s.length;i++){
+    const c=s[i];
+    if(c==="=")break;
+    const n=abc.indexOf(c);
+    if(n<0)continue;
+    v=(v<<6)|n;
+    bits+=6;
+    if(bits>=8){
+      bits-=8;
+      o.push((v>>bits)&255)
     }
-    if(c<0x80)out.push(c);
-    else if(c<0x800)out.push(0xC0|(c>>6),0x80|(c&63));
-    else if(c<0x10000)out.push(0xE0|(c>>12),0x80|((c>>6)&63),0x80|(c&63));
-    else out.push(0xF0|(c>>18),0x80|((c>>12)&63),0x80|((c>>6)&63),0x80|(c&63));
   }
-  return new Uint8Array(out)
+  return new Uint8Array(o)
 }
-function bytesToUtf8(bytes){
-  let out="";
-  for(let i=0;i<bytes.length;){
-    const c=bytes[i++];
-    if(c<0x80){out+=String.fromCharCode(c);continue}
-    if(c<0xE0){out+=String.fromCharCode(((c&31)<<6)|(bytes[i++]&63));continue}
-    if(c<0xF0){out+=String.fromCharCode(((c&15)<<12)|((bytes[i++]&63)<<6)|(bytes[i++]&63));continue}
-    const cp=((c&7)<<18)|((bytes[i++]&63)<<12)|((bytes[i++]&63)<<6)|(bytes[i++]&63);
-    const x=cp-0x10000;out+=String.fromCharCode(0xD800+(x>>10),0xDC00+(x&1023))
-  }
-  return out
-}
-const B64="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-function base64Decode(s){
-  let x=String(s||"").replace(/-/g,"+").replace(/_/g,"/").replace(/[^A-Za-z0-9+/=]/g,"");
-  while(x.length%4)x+="=";
-  const out=[];
-  for(let i=0;i<x.length;i+=4){
-    const a=B64.indexOf(x[i]),b=B64.indexOf(x[i+1]),c=x[i+2]==="="?0:B64.indexOf(x[i+2]),d=x[i+3]==="="?0:B64.indexOf(x[i+3]);
-    const n=(a<<18)|(b<<12)|(c<<6)|d;
-    out.push((n>>16)&255);
-    if(x[i+2]!=="=")out.push((n>>8)&255);
-    if(x[i+3]!=="=")out.push(n&255)
-  }
-  return new Uint8Array(out)
-}
-function base64Url(bytes){
-  let out="";
-  for(let i=0;i<bytes.length;i+=3){
-    const a=bytes[i],b=i+1<bytes.length?bytes[i+1]:0,c=i+2<bytes.length?bytes[i+2]:0,n=(a<<16)|(b<<8)|c;
-    out+=B64[(n>>18)&63]+B64[(n>>12)&63]+(i+1<bytes.length?B64[(n>>6)&63]:"")+(i+2<bytes.length?B64[n&63]:"")
-  }
-  return out.replace(/\+/g,"-").replace(/\//g,"_")
-}
-function rotl8(x,n){return((x<<n)|(x>>(8-n)))&255}
-function gmul(a,b){
-  let p=0;
-  for(let i=0;i<8;i++){if(b&1)p^=a;const hi=a&128;a=(a<<1)&255;if(hi)a^=0x1b;b>>=1}
-  return p
-}
-function gpow(a,n){let r=1;while(n){if(n&1)r=gmul(r,a);a=gmul(a,a);n>>=1}return r}
-function makeSbox(){
-  const s=new Uint8Array(256),inv=new Uint8Array(256);
-  for(let x=0;x<256;x++){
-    const y=x===0?0:gpow(x,254);
-    const v=(y^rotl8(y,1)^rotl8(y,2)^rotl8(y,3)^rotl8(y,4)^0x63)&255;
-    s[x]=v;inv[v]=x
-  }
-  return{s,inv}
-}
-const AESBOX=makeSbox();
-function aesExpandKey(key){
-  const nk=8,nr=14,w=new Uint8Array(4*4*(nr+1));
-  for(let i=0;i<32;i++)w[i]=key[i]||0;
-  let bytes=32,rcon=1;
-  while(bytes<w.length){
-    let t=[w[bytes-4],w[bytes-3],w[bytes-2],w[bytes-1]];
-    if(bytes%32===0){
-      t=[AESBOX.s[t[1]],AESBOX.s[t[2]],AESBOX.s[t[3]],AESBOX.s[t[0]]];
-      t[0]^=rcon;rcon=gmul(rcon,2)
-    }else if(bytes%32===16){
-      t=t.map(x=>AESBOX.s[x])
+function utf8(a){
+  let s="";
+  for(let i=0;i<a.length;){
+    const c=a[i++];
+    if(c<128)s+=String.fromCharCode(c);
+    else if(c<224)s+=String.fromCharCode(((c&31)<<6)|(a[i++]&63));
+    else if(c<240)s+=String.fromCharCode(((c&15)<<12)|((a[i++]&63)<<6)|(a[i++]&63));
+    else{
+      const cp=((c&7)<<18)|((a[i++]&63)<<12)|((a[i++]&63)<<6)|(a[i++]&63);
+      const z=cp-65536;
+      s+=String.fromCharCode(55296+(z>>10),56320+(z&1023))
     }
-    for(let i=0;i<4;i++){w[bytes]=w[bytes-32]^t[i];bytes++}
   }
-  return w
+  return s
 }
-function addRoundKey(st,key,round){const off=round*16;for(let i=0;i<16;i++)st[i]^=key[off+i]}
-function invSubBytes(st){for(let i=0;i<16;i++)st[i]=AESBOX.inv[st[i]]}
-function invShiftRows(st){
-  const x=st.slice();
-  for(let r=0;r<4;r++)for(let c=0;c<4;c++)st[4*c+r]=x[4*((c-r+4)%4)+r]
+function utf8enc(s){
+  const e=encodeURIComponent(String(s)),a=[];
+  for(let i=0;i<e.length;){
+    if(e[i]==="%"){
+      a.push(parseInt(e.slice(i+1,i+3),16));
+      i+=3
+    }else a.push(e.charCodeAt(i++))
+  }
+  return new Uint8Array(a)
 }
-function invMixColumns(st){
+function b64url(a){
+  const abc="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",u=a instanceof Uint8Array?a:new Uint8Array(a),o=[];
+  for(let i=0;i<u.length;i+=3){
+    const x=u[i],y=i+1<u.length?u[i+1]:0,z=i+2<u.length?u[i+2]:0;
+    o.push(
+      abc[x>>2],
+      abc[((x&3)<<4)|(y>>4)],
+      i+1<u.length?abc[((y&15)<<2)|(z>>6)]:"=",
+      i+2<u.length?abc[z&63]:"="
+    )
+  }
+  return o.join("").replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")
+}
+
+/* ---------- AES-256-CBC ---------- */
+const AES_SBOX=[99,124,119,123,242,107,111,197,48,1,103,43,254,215,171,118,202,130,201,125,250,89,71,240,173,212,162,175,156,164,114,192,183,253,147,38,54,63,247,204,52,165,229,241,113,216,49,21,4,199,35,195,24,150,5,154,7,18,128,226,235,39,178,117,9,131,44,26,27,110,90,160,82,59,214,179,41,227,47,132,83,209,0,237,32,252,177,91,106,203,190,57,74,76,88,207,208,239,170,251,67,77,51,133,69,249,2,127,80,60,159,168,81,163,64,143,146,157,56,245,188,182,218,33,16,255,243,210,205,12,19,236,95,151,68,23,196,167,126,61,100,93,25,115,96,129,79,220,34,42,144,136,70,238,184,20,222,94,11,219,224,50,58,10,73,6,36,92,194,211,172,98,145,149,228,121,231,200,55,109,141,213,78,169,108,86,244,234,101,122,174,8,186,120,37,46,28,166,180,198,232,221,116,31,75,189,139,138,112,62,181,102,72,3,246,14,97,53,87,185,134,193,29,158,225,248,152,17,105,217,142,148,155,30,135,233,206,85,40,223,140,161,137,13,191,230,66,104,65,153,45,15,176,84,187,22];
+const AES_ISBOX=[82,9,106,213,48,54,165,56,191,64,163,158,129,243,215,251,124,227,57,130,155,47,255,135,52,142,67,68,196,222,233,203,84,123,148,50,166,194,35,61,238,76,149,11,66,250,195,78,8,46,161,102,40,217,36,178,118,91,162,73,109,139,209,37,114,248,246,100,134,104,152,22,212,164,92,204,93,101,182,146,108,112,72,80,253,237,185,218,94,21,70,87,167,141,157,132,144,216,171,0,140,188,211,10,247,228,88,5,184,179,69,6,208,44,30,143,202,63,15,2,193,175,189,3,1,19,138,107,58,145,17,65,79,103,220,234,151,242,207,206,240,180,230,115,150,172,116,34,231,173,53,133,226,249,55,232,28,117,223,110,71,241,26,113,29,41,197,137,111,183,98,14,170,24,190,27,252,86,62,75,198,210,121,32,154,219,192,254,120,205,90,244,31,221,168,51,136,7,199,49,177,18,16,89,39,128,236,95,96,81,127,169,25,181,74,13,45,229,122,159,147,201,156,239,160,224,59,77,174,42,245,176,200,235,187,60,131,83,153,97,23,43,4,126,186,119,214,38,225,105,20,99,85,33,12,125];
+const AES_RCON=[0,1,2,4,8,16,32,64,128,27,54,108,216,171,77];
+function aesX(a,b){
+  let r=0;
+  for(let i=0;i<8;i++){
+    if(b&1)r^=a;
+    const h=a&128;
+    a=(a<<1)&255;
+    if(h)a^=27;
+    b>>=1
+  }
+  return r
+}
+function aesKey(key){
+  const k=new Uint8Array(240);
+  k.set(key);
+  const bytes=key.length;
+  let i=bytes,temp=new Uint8Array(4),r=1;
+  while(i<240){
+    for(let j=0;j<4;j++)temp[j]=k[i-4+j];
+    if(i%bytes===0){
+      const t=temp[0];
+      temp[0]=AES_SBOX[temp[1]];
+      temp[1]=AES_SBOX[temp[2]];
+      temp[2]=AES_SBOX[temp[3]];
+      temp[3]=AES_SBOX[t];
+      temp[0]^=AES_RCON[r++]
+    }else if(bytes===32&&i%bytes===16){
+      for(let j=0;j<4;j++)temp[j]=AES_SBOX[temp[j]]
+    }
+    for(let j=0;j<4;j++){
+      k[i]=k[i-bytes]^temp[j];
+      i++
+    }
+  }
+  return k
+}
+function aesAdd(s,k,r){
+  const o=r*16;
+  for(let i=0;i<16;i++)s[i]^=k[o+i]
+}
+function aesInvShift(s){
+  const t=s.slice();
+  for(let r=0;r<4;r++)for(let c=0;c<4;c++)s[4*c+r]=t[4*((c-r+4)%4)+r]
+}
+function aesInvSub(s){
+  for(let i=0;i<16;i++)s[i]=AES_ISBOX[s[i]]
+}
+function aesInvMix(s){
   for(let c=0;c<4;c++){
-    const i=4*c,a=st[i],b=st[i+1],d=st[i+2],e=st[i+3];
-    st[i]=gmul(a,14)^gmul(b,11)^gmul(d,13)^gmul(e,9);
-    st[i+1]=gmul(a,9)^gmul(b,14)^gmul(d,11)^gmul(e,13);
-    st[i+2]=gmul(a,13)^gmul(b,9)^gmul(d,14)^gmul(e,11);
-    st[i+3]=gmul(a,11)^gmul(b,13)^gmul(d,9)^gmul(e,14)
+    const i=4*c,a=s[i],b=s[i+1],d=s[i+2],e=s[i+3];
+    s[i]=aesX(a,14)^aesX(b,11)^aesX(d,13)^aesX(e,9);
+    s[i+1]=aesX(a,9)^aesX(b,14)^aesX(d,11)^aesX(e,13);
+    s[i+2]=aesX(a,13)^aesX(b,9)^aesX(d,14)^aesX(e,11);
+    s[i+3]=aesX(a,11)^aesX(b,13)^aesX(d,9)^aesX(e,14)
   }
 }
-function aesDecryptBlock(input,key){
-  const st=new Uint8Array(input),rounds=14;
-  addRoundKey(st,key,rounds);
-  for(let r=rounds-1;r>0;r--){invShiftRows(st);invSubBytes(st);addRoundKey(st,key,r);invMixColumns(st)}
-  invShiftRows(st);invSubBytes(st);addRoundKey(st,key,0);
-  return st
+function aesDecBlock(block,key){
+  const s=new Uint8Array(block),k=aesKey(key),nr=key.length===16?10:14;
+  aesAdd(s,k,nr);
+  aesInvShift(s);
+  aesInvSub(s);
+  for(let r=nr-1;r>0;r--){
+    aesAdd(s,k,r);
+    aesInvMix(s);
+    aesInvShift(s);
+    aesInvSub(s)
+  }
+  aesAdd(s,k,0);
+  return s
 }
-function aesCbcDecrypt(cipher,key,iv){
-  if(cipher.length%16!==0)throw new Error("AES ciphertext length");
-  const out=new Uint8Array(cipher.length),k=aesExpandKey(key);
+function aesCbcDec(data,key,iv){
+  if(data.length%16)throw new Error("Invalid AES ciphertext");
+  const o=new Uint8Array(data.length);
   let prev=iv.slice();
-  for(let off=0;off<cipher.length;off+=16){
-    const block=aesDecryptBlock(cipher.slice(off,off+16),k);
-    for(let i=0;i<16;i++)out[off+i]=block[i]^prev[i];
-    prev=cipher.slice(off,off+16)
+  for(let p=0;p<data.length;p+=16){
+    const b=aesDecBlock(data.slice(p,p+16),key);
+    for(let i=0;i<16;i++)o[p+i]=b[i]^prev[i];
+    prev=data.slice(p,p+16)
   }
-  const pad=out[out.length-1];
-  if(pad<1||pad>16)throw new Error("AES padding");
-  for(let i=out.length-pad;i<out.length;i++)if(out[i]!==pad)throw new Error("AES padding");
-  return out.slice(0,out.length-pad)
+  const pad=o[o.length-1];
+  if(!pad||pad>16)throw new Error("Invalid PKCS7 padding");
+  for(let i=o.length-pad;i<o.length;i++)if(o[i]!==pad)throw new Error("Invalid PKCS7 padding");
+  return o.slice(0,o.length-pad)
 }
-function sha256(bytes){
-  const K=[
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-  ];
-  const bitLen=bytes.length*8,blocks=Math.ceil((bytes.length+9)/64),data=new Uint8Array(blocks*64);
-  data.set(bytes);data[bytes.length]=128;
-  const hi=Math.floor(bitLen/0x100000000),lo=bitLen>>>0;
-  data[data.length-8]=(hi>>>24)&255;data[data.length-7]=(hi>>>16)&255;data[data.length-6]=(hi>>>8)&255;data[data.length-5]=hi&255;
-  data[data.length-4]=(lo>>>24)&255;data[data.length-3]=(lo>>>16)&255;data[data.length-2]=(lo>>>8)&255;data[data.length-1]=lo&255;
-  let h0=0x6a09e667,h1=0xbb67ae85,h2=0x3c6ef372,h3=0xa54ff53a,h4=0x510e527f,h5=0x9b05688c,h6=0x1f83d9ab,h7=0x5be0cd19;
-  const rotr=(x,n)=>(x>>>n)|(x<<(32-n)),add=(...xs)=>xs.reduce((a,b)=>(a+b)>>>0,0);
-  for(let off=0;off<data.length;off+=64){
-    const w=new Uint32Array(64);
-    for(let i=0;i<16;i++){const p=off+i*4;w[i]=((data[p]<<24)|(data[p+1]<<16)|(data[p+2]<<8)|data[p+3])>>>0}
+
+/* ---------- SHA-256 / HMAC ---------- */
+const SHA_K=[1116352408,1899447441,3049327441,3921009573,961987163,1508970993,2453635748,2870763221,3624381080,310598401,607225278,1426881987,1925078388,2162072063,2614888103,3248222580,3835390401,4022224774,264347078,604807628,770255983,1249150122,1555081692,1996064986,2821834349,2952996808,3210313671,3336571891,3584528711,113926993,3382418951,666307205,773529912,1294757372,1396183700,1695183700,2177026350,2456956037,2730485921,2820302411,3259734187,3345764771,3516065817,3600352804,4094571909,275423344,430227734,506948616,659060556,883997877,958139571,1322822218,1537002063,1747873772,1779033703,1839830562,2092067163,2281173324,2358390877,2454569567,2730485921,2820302411];
+const SHA_H=[1779033703,3144134277,1013904242,2773480762,1359893119,2600822924,528734635,1541459225];
+
+function sha256(m){
+  const a=m instanceof Uint8Array?m:utf8enc(m),l=a.length,n=((l+9+63)>>6)<<6,b=new Uint8Array(n);
+  b.set(a);
+  b[l]=128;
+  const bits=l*8;
+  for(let i=0;i<8;i++)b[n-1-i]=(bits/2**(8*i))&255;
+  let h=SHA_H.slice(),w=new Uint32Array(64);
+  for(let p=0;p<n;p+=64){
+    for(let i=0;i<16;i++)w[i]=(b[p+4*i]<<24)|(b[p+4*i+1]<<16)|(b[p+4*i+2]<<8)|b[p+4*i+3];
     for(let i=16;i<64;i++){
-      const s0=rotr(w[i-15],7)^rotr(w[i-15],18)^(w[i-15]>>>3);
-      const s1=rotr(w[i-2],17)^rotr(w[i-2],19)^(w[i-2]>>>10);
-      w[i]=add(w[i-16],s0,w[i-7],s1)
+      const x=w[i-15],y=w[i-2];
+      const s0=((x>>>7)|(x<<25))^((x>>>18)|(x<<14))^(x>>>3);
+      const s1=((y>>>17)|(y<<15))^((y>>>19)|(y<<13))^(y>>>10);
+      w[i]=(w[i-16]+s0+w[i-7]+s1)>>>0
     }
-    let a=h0,b=h1,c=h2,d=h3,e=h4,f=h5,g=h6,h=h7;
+    let[a0,a1,a2,a3,a4,a5,a6,a7]=h;
     for(let i=0;i<64;i++){
-      const S1=rotr(e,6)^rotr(e,11)^rotr(e,25),ch=(e&f)^((~e)&g);
-      const temp1=add(h,S1,ch,K[i],w[i]);
-      const S0=rotr(a,2)^rotr(a,13)^rotr(a,22),maj=(a&b)^(a&c)^(b&c);
-      const temp2=add(S0,maj);
-      h=g;g=f;f=e;e=add(d,temp1);d=c;c=b;b=a;a=add(temp1,temp2)
+      const S1=((a4>>>6)|(a4<<26))^((a4>>>11)|(a4<<21))^((a4>>>25)|(a4<<7));
+      const ch=(a4&a5)^(~a4&a6);
+      const t1=(a7+S1+ch+SHA_K[i]+w[i])>>>0;
+      const S0=((a0>>>2)|(a0<<30))^((a0>>>13)|(a0<<19))^((a0>>>22)|(a0<<10));
+      const maj=(a0&a1)^(a0&a2)^(a1&a2);
+      const t2=(S0+maj)>>>0;
+      a7=a6;a6=a5;a5=a4;a4=(a3+t1)>>>0;
+      a3=a2;a2=a1;a1=a0;a0=(t1+t2)>>>0
     }
-    h0=add(h0,a);h1=add(h1,b);h2=add(h2,c);h3=add(h3,d);h4=add(h4,e);h5=add(h5,f);h6=add(h6,g);h7=add(h7,h)
+    h[0]=(h[0]+a0)>>>0;
+    h[1]=(h[1]+a1)>>>0;
+    h[2]=(h[2]+a2)>>>0;
+    h[3]=(h[3]+a3)>>>0;
+    h[4]=(h[4]+a4)>>>0;
+    h[5]=(h[5]+a5)>>>0;
+    h[6]=(h[6]+a6)>>>0;
+    h[7]=(h[7]+a7)>>>0
   }
-  const out=new Uint8Array(32),v=[h0,h1,h2,h3,h4,h5,h6,h7];
-  for(let i=0;i<8;i++){out[i*4]=(v[i]>>>24)&255;out[i*4+1]=(v[i]>>>16)&255;out[i*4+2]=(v[i]>>>8)&255;out[i*4+3]=v[i]&255}
-  return out
-}
-function hmacSha256(key,msg){
-  let k=key.length>64?sha256(key):key.slice();
-  if(k.length<64){const x=new Uint8Array(64);x.set(k);k=x}
-  const o=new Uint8Array(64),i=new Uint8Array(64);
-  for(let n=0;n<64;n++){o[n]=k[n]^0x5c;i[n]=k[n]^0x36}
-  const inner=new Uint8Array(i.length+msg.length);inner.set(i);inner.set(msg,i.length);
-  const ih=sha256(inner),outer=new Uint8Array(o.length+ih.length);outer.set(o);outer.set(ih,o.length);
-  return sha256(outer)
-}
-function sourceFile(response){
-  const encrypted=response&&response.enc;
-  if(typeof encrypted==="string"&&encrypted){
-    const key=new Uint8Array(32);key.set(utf8Bytes("i?LMTAx0Q6,:}50U").slice(0,32));
-    const iv=utf8Bytes("W0;27ToaUpl_P%'c").slice(0,16);
-    const plain=bytesToUtf8(aesCbcDecrypt(base64Decode(encrypted),key,iv));
-    const obj=JSON.parse(plain);
-    return obj&&typeof obj.file==="string"?obj.file:null
+  const o=new Uint8Array(32);
+  for(let i=0;i<8;i++){
+    o[4*i]=h[i]>>>24;
+    o[4*i+1]=h[i]>>>16;
+    o[4*i+2]=h[i]>>>8;
+    o[4*i+3]=h[i]
   }
-  const s=response&&response.sources;
-  if(s&&typeof s==="object"&&!Array.isArray(s)&&typeof s.file==="string")return s.file;
+  return o
+}
+function hmac256(key,msg){
+  let k=utf8enc(key),m=msg instanceof Uint8Array?msg:utf8enc(msg);
+  if(k.length>64)k=sha256(k);
+  const p=new Uint8Array(64),q=new Uint8Array(64);
+  p.fill(54);q.fill(92);
+  for(let i=0;i<k.length;i++){p[i]^=k[i];q[i]^=k[i]}
+  const z=new Uint8Array(64+m.length);
+  z.set(p);z.set(m,64);
+  const ih=sha256(z);
+  const z2=new Uint8Array(64+ih.length);
+  z2.set(q);z2.set(ih,64);
+  return sha256(z2)
+}
+
+/* ---------- MegaPlay / VidTube extraction ---------- */
+function sourceFile(r){
+  const enc=r&&r.enc;
+  if(typeof enc==="string"&&enc){
+    try{
+      const k=new Uint8Array(32);
+      k.set(utf8enc("i?LMTAx0Q6,:}50U"));
+      const iv=utf8enc("W0;27ToaUpl_P%'c");
+      const p=aesCbcDec(b64dec(enc),k,iv);
+      const o=JSON.parse(utf8(p));
+      if(o&&typeof o.file==="string"&&o.file)return o.file
+    }catch(e){
+      log("Megaplay decrypt failed: "+e.message)
+    }
+  }
+  const s=r&&r.sources;
+  if(s&&!Array.isArray(s)&&typeof s.file==="string")return s.file;
   if(Array.isArray(s)&&s.length&&s[0]&&typeof s[0].file==="string")return s[0].file;
   return null
 }
-function signUrl(fileUrl){
-  let u;
-  try{u=new URL(String(fileUrl))}catch(e){return String(fileUrl||"")}
-  const m=u.pathname.match(/\/([a-f0-9]{32})\/([a-f0-9]{32})\//i);
-  if(!m)return String(fileUrl||"");
-  const expires=Math.floor(Date.now()/1000)+90;
-  const payload=utf8Bytes(expires+"|"+m[1].toLowerCase()+"/"+m[2].toLowerCase());
-  const sig=hmacSha256(utf8Bytes("MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s"),payload);
-  u.searchParams.set("token",base64Url(payload)+"."+base64Url(sig));
-  return u.toString()
+function signMegaplay(u){
+  try{
+    const x=new URL(u),m=x.pathname.match(/\/([a-f0-9]{32})\/([a-f0-9]{32})\//i);
+    if(!m)return u;
+    const p=utf8enc(Math.floor(Date.now()/1000)+90+"|"+m[1].toLowerCase()+"/"+m[2].toLowerCase());
+    const sig=hmac256("MpCdnT0k3n!9f2K#xQ7vL5mR8wN1pY4s",p);
+    const q=x.search?x.search+"&":"?";
+    return x.href.split("?")[0]+q+"token="+b64url(p)+"."+b64url(sig)
+  }catch(e){
+    log("Megaplay signing failed: "+e.message);
+    return u
+  }
 }
-function subtitleFromTracks(tracks,kind){
-  if(!Array.isArray(tracks))return null;
-  const captions=tracks.filter(t=>t&&String(t.kind||"").toLowerCase()==="captions");
-  if(!captions.length)return null;
-  let s;
-  if(kind==="megaplay")s=captions.find(t=>String(t.label||"").toLowerCase()==="english")||captions.find(t=>t.default===true)||captions[0];
-  else s=captions.find(t=>String(t.lang||"").toLowerCase()==="english")||captions.find(t=>t.default===true)||captions[0];
-  const url=String(s&&s.file||"").replace(/\\/g,"").trim();
-  if(!url)return null;
-  const m=url.split(/[?#]/)[0].match(/\.([a-z0-9]+)$/i),ext=m&&m[1].toLowerCase();
-  return{url,format:ext==="srt"||ext==="vtt"||ext==="ass"?ext:"vtt"}
+function subFormat(u,d){
+  const a=["srt","vtt","ass"],x=String(d||"").toLowerCase().replace(/^\./,"");
+  if(a.indexOf(x)>=0)return x;
+  try{
+    const p=new URL(u).pathname.split(".").pop().toLowerCase();
+    return a.indexOf(p)>=0?p:"vtt"
+  }catch(e){return"vtt"}
 }
+function streamHeaders(ref,origin){
+  return{"Referer":ref,"Origin":origin,"User-Agent":UA,"Accept":"*/*"}
+}
+function cleanStreamUrl(u){return String(u||"").replace(/\\/g,"").trim()}
 
-/* ---------- Host extraction ---------- */
-function streamType(url){
-  const s=String(url||"").split(/[?#]/)[0].toLowerCase();
-  if(/\.mpd$/.test(s))return"mpd";
-  if(/\.mp4$/.test(s))return"mp4";
-  if(/\.mkv$/.test(s))return"mkv";
-  if(/\.webm$/.test(s))return"webm";
-  return"m3u8"
-}
-function validMediaUrl(url){
-  const s=String(url||"").trim();
-  if(!/^https?:\/\//i.test(s))return false;
-  if(/(?:<html|<!doctype|application\/json|\/(?:ajax|api)\b)/i.test(s))return false;
-  if(/\.(?:m3u8|mp4|mkv|webm|mpd|m4s)(?:$|[?#])/i.test(s))return true;
-  if(/[?&](?:token|signature)=/i.test(s)&&/[a-f0-9]{32}/i.test(s))return true;
-  return false
-}
-async function extractMegaPlay(url,quality,server){
-  const html=await getText(url,{headers:AJAX_HEADERS},6000);
-  if(!html)return null;
-  const root=parseHTML(html),player=first(root,"#megaplay-player"),mediaId=attr(player,"data-id").trim();
-  if(!mediaId){log("MEGAPLAY PLAYER ID MISSING");return null}
-  log("MEGAPLAY PLAYER ID "+mediaId);
-  let response=null,file=null;
-  for(const endpoint of ["getSources","getSourcesNew"]){
-    const page=new URL(url),api=new URL("/stream/"+endpoint,page.origin);
-    api.searchParams.set("id",mediaId);
-    if(page.searchParams.get("s")!==null)api.searchParams.set("s",page.searchParams.get("s"));
-    const d=await getJson(api.toString(),{headers:{"X-Requested-With":"XMLHttpRequest","Referer":url,"User-Agent":UA}},6000);
-    if(!d)continue;
-    try{file=sourceFile(d)}catch(e){log("MEGAPLAY "+endpoint+" DECODE FAILED");file=null}
-    if(file){response=d;log("MEGAPLAY SOURCES "+endpoint);break}
-  }
-  if(!file||!response)return null;
-  file=String(file).replace(/\\/g,"").trim();
-  if(!validMediaUrl(file)){log("MEGAPLAY SOURCE NOT MEDIA");return null}
-  const sub=subtitleFromTracks(response.tracks,"megaplay");
-  const signed=signUrl(file);
-  log("MEGAPLAY STREAM SUCCESS");
-  return{
-    name:"Anikoto [MegaPlay]",
-    title:"Anikoto MegaPlay",
-    url:signed,
-    quality:quality||"multi-quality",
-    server:server||"MegaPlay",
-    backup:false,
-    headers:{
-      Referer:"https://megaplay.buzz/",
-      Origin:"https://megaplay.buzz"
-    },
-    customHeaders:{
-      Referer:"https://megaplay.buzz/",
-      Origin:"https://megaplay.buzz"
-    },
-    subtitle:sub&&sub.url||null,
-    subtitleFormat:sub&&sub.format||"vtt"
-  }
-}
-async function extractVidTube(url,quality,server){
-  const html=await getText(url,{headers:AJAX_HEADERS},6000);
-  if(!html)return null;
-  const root=parseHTML(html),player=first(root,"#megaplay-player"),id=attr(player,"data-id").trim();
-  if(!id){log("VIDTUBE PLAYER ID MISSING");return null}
-  log("VIDTUBE PLAYER ID "+id);
-  let type="";
-  try{type=new URL(url).pathname.split("/").filter(Boolean).pop()||""}catch(e){}
+async function extractVidtube(u,server){
+  const h=await getText(u,{headers:AJAX_HEADERS},7000);
+  if(!h)return null;
+  const r=parseHTML(h),p=first(r,"#megaplay-player"),id=attr(p,"data-id").trim();
+  if(!id)return null;
+  const z=new URL(u),parts=z.pathname.split("/").filter(Boolean),type=parts[parts.length-1];
   if(!type)return null;
-  const api="https://vidtube.site/stream/getSourcesNew?id="+encodeURIComponent(id)+"&type="+encodeURIComponent(type);
-  const d=await getJson(api,{headers:{"X-Requested-With":"XMLHttpRequest","Referer":url,"User-Agent":UA}},6000);
-  const file=d&&d.sources&&typeof d.sources==="object"&&String(d.sources.file||"").trim();
-  if(!file||!validMediaUrl(file)){log("VIDTUBE SOURCE NOT MEDIA");return null}
-  const sub=subtitleFromTracks(d.tracks,"vidtube");
-  log("VIDTUBE STREAM SUCCESS");
+  const d=await getJson(
+    "https://vidtube.site/stream/getSourcesNew?id="+encodeURIComponent(id)+"&type="+encodeURIComponent(type),
+    {
+      headers:{
+        "X-Requested-With":"XMLHttpRequest",
+        "Referer":"https://vidtube.site/",
+        "Origin":"https://vidtube.site",
+        "User-Agent":UA,
+        "Accept":"*/*"
+      }
+    },
+    10000
+  );
+  const playlist=d&&d.sources&&d.sources.file;
+  if(!playlist)return null;
+  const tr=Array.isArray(d&&d.tracks)?d.tracks:[];
+  let sub=null;
+  for(const x of tr)if(x&&x.kind==="captions"&&String(x.lang||"").toLowerCase()==="english"){sub=x.file;break}
+  if(!sub)for(const x of tr)if(x&&x.kind==="captions"&&x.default===true){sub=x.file;break}
+  sub=cleanStreamUrl(sub);
   return{
-    name:"Anikoto [VidTube]",
-    title:"Anikoto VidTube",
-    url:String(file).replace(/\\/g,"").trim(),
-    quality:quality||"multi-quality",
-    server:server||"VidTube",
-    backup:false,
-    headers:{
-      Referer:"https://vidtube.site/",
-      Origin:"https://vidtube.site"
-    },
-    customHeaders:{
-      Referer:"https://vidtube.site/",
-      Origin:"https://vidtube.site"
-    },
-    subtitle:sub&&sub.url||null,
-    subtitleFormat:sub&&sub.format||"vtt"
+    name:server||"vidtube",
+    title:(server||"vidtube")+" [multi-quality]",
+    url:cleanStreamUrl(playlist),
+    quality:"multi-quality",
+    headers:streamHeaders("https://vidtube.site/","https://vidtube.site"),
+    subtitle:sub||"",
+    subtitleFormat:sub?"vtt":"",
+    subtitles:sub?[{
+      url:sub,
+      name:"English",
+      language:"en",
+      format:"vtt",
+      default:true,
+      headers:streamHeaders("https://vidtube.site/","https://vidtube.site")
+    }]:[],
+    backup:false
   }
-}
-async function extractHost(url,quality,server){
-  let host="";
-  try{host=new URL(url).hostname.toLowerCase().split(".")[0]}catch(e){return null}
-  if(host==="megaplay")return extractMegaPlay(url,quality,server).catch(e=>{log("MEGAPLAY FAILED "+String(e&&e.message||e));return null});
-  if(host==="vidtube")return extractVidTube(url,quality,server).catch(e=>{log("VIDTUBE FAILED "+String(e&&e.message||e));return null});
-  log("Unsupported host="+host);
-  return null
 }
 
-/* ---------- Nuvio settings / stream resolution ---------- */
-function boolSetting(v,def){
-  if(v===undefined||v===null)return def;
-  if(typeof v==="boolean")return v;
-  const s=String(v).toLowerCase();
-  if(s==="true"||s==="1"||s==="yes"||s==="on"||s==="enabled")return true;
-  if(s==="false"||s==="0"||s==="no"||s==="off"||s==="disabled")return false;
-  return def
-}
-function getSetting(settings,names,def){
-  for(const n of names){
-    if(settings&&Object.prototype.hasOwnProperty.call(settings,n))return settings[n];
+async function extractMegaplay(u,server){
+  const h=await getText(u,{headers:AJAX_HEADERS},7000);
+  if(!h)return null;
+  const r=parseHTML(h),p=first(r,"#megaplay-player"),id=attr(p,"data-id").trim();
+  if(!id)return null;
+  const page=new URL(u);
+  let source=null,file=null;
+  for(const ep of["getSources","getSourcesNew"]){
+    try{
+      let q=page.origin+"/stream/"+ep+"?id="+encodeURIComponent(id);
+      const sec=page.searchParams&&page.searchParams.get("s");
+      if(sec)q+="&s="+encodeURIComponent(sec);
+      const d=await getJson(
+        q,
+        {
+          headers:{
+            "X-Requested-With":"XMLHttpRequest",
+            "Referer":u,
+            "Origin":page.origin,
+            "User-Agent":UA,
+            "Accept":"*/*"
+          }
+        },
+        10000
+      );
+      const f=sourceFile(d);
+      if(f){
+        source=d;
+        file=cleanStreamUrl(f);
+        break
+      }
+    }catch(e){
+      log("Megaplay "+ep+" failed: "+e.message)
+    }
   }
-  return def
+  if(!file||!source)return null;
+  const tr=Array.isArray(source.tracks)?source.tracks:[];
+  let en=null;
+  for(const x of tr)if(x&&x.kind==="captions"&&String(x.label||"").toLowerCase()==="english"){en=x;break}
+  if(!en)for(const x of tr)if(x&&x.kind==="captions"&&x.default===true){en=x;break}
+  const sub=cleanStreamUrl(en&&en.file);
+  const fmt=sub?subFormat(sub,en&&en.format):"";
+  const signed=signMegaplay(file);
+  log("Megaplay source resolved; signed playback URL generated");
+  return{
+    name:server||"Megaplay",
+    title:(server||"Megaplay")+" [multi-quality]",
+    url:signed,
+    quality:"multi-quality",
+    headers:streamHeaders("https://megaplay.buzz/","https://megaplay.buzz/"),
+    subtitle:sub||"",
+    subtitleFormat:fmt,
+    subtitles:sub?[{
+      url:sub,
+      name:"English",
+      language:"en",
+      format:fmt||"vtt",
+      default:true,
+      headers:streamHeaders("https://megaplay.buzz/","https://megaplay.buzz/")
+    }]:[],
+    backup:false
+  }
+}
+
+async function extractHost(u,server){
+  try{
+    const h=new URL(u).hostname.toLowerCase().split(".")[0];
+    if(h==="vidtube")return await extractVidtube(u,server);
+    if(h==="megaplay")return await extractMegaplay(u,server);
+    log("Unsupported extractor host: "+h);
+    return null
+  }catch(e){
+    log("Extractor "+(server||"unknown")+" failed: "+String(e&&e.message||e));
+    return null
+  }
+}
+function validMediaUrl(u){
+  try{
+    const x=new URL(String(u||""));
+    return x.protocol==="http:"||x.protocol==="https:"
+  }catch(e){return false}
+}
+function streamType(u){
+  const x=String(u||"").toLowerCase();
+  if(x.includes(".m3u8"))return"m3u8";
+  if(x.includes(".mpd"))return"mpd";
+  return"unknown"
+}
+
+/* ---------- Settings ---------- */
+function getSetting(settings,names,fallback){
+  if(!settings||typeof settings!=="object")return fallback;
+  for(const n of names){
+    if(Object.prototype.hasOwnProperty.call(settings,n)&&settings[n]!==undefined&&settings[n]!==null)return settings[n]
+  }
+  return fallback
 }
 function modes(settings){
-  const subKeys=["sub","Sub","subtitle","subtitles"],dubKeys=["dub","Dub"];
-  const hasSub=subKeys.some(k=>settings&&Object.prototype.hasOwnProperty.call(settings,k));
-  const hasDub=dubKeys.some(k=>settings&&Object.prototype.hasOwnProperty.call(settings,k));
-  const sub=boolSetting(getSetting(settings,subKeys,true),true);
-  const dub=boolSetting(getSetting(settings,dubKeys,false),false);
-  if(!hasSub&&!hasDub)return[false];
+  const sub=getSetting(settings,["sub","Sub","subtitle"],true)!==false;
+  const dub=getSetting(settings,["dub","Dub"],false)===true;
   const out=[];
   if(sub)out.push(false);
   if(dub)out.push(true);
-  return out
+  return out.length?out:[false]
 }
-function qualitySetting(settings){return String(getSetting(settings,["quality","Quality"],"multi-quality")||"multi-quality")}
+function qualitySetting(settings){
+  return String(getSetting(settings,["quality","Quality"],"multi-quality")||"multi-quality")
+}
 
+/* ---------- Parallel server resolution ---------- */
 async function resolveServers(servers,quality){
-  const started=Date.now(),state={firstStart:started,firstStreamLogged:false},tasks=servers.map(server=>async()=>{
+  const started=Date.now(),state={firstStart:started,firstStreamLogged:false};
+  const tasks=servers.map(server=>async()=>{
     const serverStarted=Date.now(),link=server&&server.link_id;
     if(!link)return null;
     const d=await getJson(AJAX+"/server?get="+encodeURIComponent(link),{headers:AJAX_HEADERS},5000);
@@ -735,11 +837,13 @@ async function resolveMode(episodeId,isDub,quality){
   const out=[],seen=new Set();
   for(const s of streams){
     if(!s||!validMediaUrl(s.url)||seen.has(s.url))continue;
-    seen.add(s.url);out.push(s)
+    seen.add(s.url);
+    out.push(s)
   }
   return out
 }
 
+/* ---------- Main ---------- */
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase();
@@ -790,7 +894,8 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       const seen=new Set(),out=[];
       for(const stream of allStreams){
         if(!stream||!stream.url||seen.has(stream.url))continue;
-        seen.add(stream.url);out.push(stream)
+        seen.add(stream.url);
+        out.push(stream)
       }
       log("DONE streams="+out.length+" time="+(Date.now()-started)+"ms");
       return out
