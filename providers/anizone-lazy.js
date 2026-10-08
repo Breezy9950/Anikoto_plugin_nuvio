@@ -193,51 +193,15 @@ function seasonRules(season){
   ]}
 }
 
-function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTitle=""){
-  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))];
-  const base=normalize(baseTitle);
-  const sn=normalize(seasonName);
-  const en=normalize(episodeTitle);
-  const s=Number(season)||1;
-
+function matchCard(cards,targetTitles,baseTitle,season=1,seasonName=""){
+  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))],base=normalize(baseTitle),sn=normalize(seasonName),s=Number(season)||1;
   if(sn&&sn!=="season"+s){
-    for(const c of cards){
-      for(const t of cardTitles(c)){
-        const n=normalize(t);
-        if(n===sn||n.includes(sn)||sn.includes(n))return cardSlug(c)
-      }
+    for(const c of cards)for(const t of cardTitles(c)){
+      const n=normalize(t);
+      if(n===sn||n.includes(sn))return c.slug
     }
   }
-
-  for(const target of targets){
-    for(const c of cards){
-      for(const t of cardTitles(c)){
-        if(normalize(t)!==target)continue;
-        const titles=cardTitles(c);
-        if(s===1){
-          const rules=seasonRules(s);
-          if(rules.mustNot.some(r=>titles.some(x=>r.test(x))))continue
-          return cardSlug(c)
-        }
-
-        const rules=seasonRules(s);
-        if(sn){
-          const hasSeasonName=titles.some(x=>{
-            const n=normalize(x);
-            return n===sn||n.includes(sn)||sn.includes(n)
-          });
-          if(!hasSeasonName)continue
-          return cardSlug(c)
-        }
-
-        if(titles.some(x=>rules.must.some(r=>r.test(x))))return cardSlug(c)
-      }
-    }
-  }
-
   const rules=seasonRules(s);
-  const candidates=[];
-
   for(const c of cards){
     const titles=cardTitles(c);
     let baseMatch=false;
@@ -246,32 +210,16 @@ function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTi
       if(!base||n.includes(base)||base.includes(n)){baseMatch=true;break}
     }
     if(!baseMatch)continue;
-
     if(s===1){
       if(rules.mustNot.some(r=>titles.some(t=>r.test(t))))continue;
-      candidates.push({card:c,score:10});
-      continue
+      for(const target of targets)for(const t of titles)if(normalize(t)===target)return c.slug;
+      return c.slug
     }
-
-    const hasSeasonRule=titles.some(t=>rules.must.some(r=>r.test(t)));
-    const hasSeasonName=!!sn&&titles.some(t=>{
-      const n=normalize(t);
-      return n===sn||n.includes(sn)||sn.includes(n)
-    });
-    const hasEpisodeTitle=!!en&&titles.some(t=>{
-      const n=normalize(t);
-      return n===en||n.includes(en)||en.includes(n)
-    });
-
-    if(hasSeasonName)candidates.push({card:c,score:100+(hasEpisodeTitle?20:0)});
-    else if(hasSeasonRule)candidates.push({card:c,score:50+(hasEpisodeTitle?20:0)})
+    if(titles.some(t=>rules.must.some(r=>r.test(t))))return c.slug
   }
-
-  if(candidates.length){
-    candidates.sort((a,b)=>b.score-a.score);
-    return cardSlug(candidates[0].card)
+  if(s===1){
+    for(const target of targets)for(const c of cards)for(const t of cardTitles(c))if(normalize(t)===target)return c.slug
   }
-
   return null
 }
 
@@ -358,18 +306,6 @@ async function getTmdbInfo(tmdbId,mediaType,season=1){
   }
 }
 
-async function getTmdbSeasonInfo(tmdbId,season,episode){
-  const s=Number(season)||1,e=Number(episode)||1;
-  const url="https://api.themoviedb.org/3/tv/"+encodeURIComponent(tmdbId)+"/season/"+s+"?api_key="+TMDB_API_KEY+"&language=en-US";
-  const d=await json(url,{headers:{"Accept":"application/json"}},2500);
-  if(!d)return null;
-  const ep=Array.isArray(d.episodes)?d.episodes.find(x=>Number(x&&x.episode_number)===e):null;
-  return{
-    seasonName:String(d.name||"").trim(),
-    episodeTitle:String(ep&&ep.name||"").trim()
-  }
-}
-
 async function dbMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
   season=Number(season)||1;
@@ -453,7 +389,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
   console.log("[AniZone Lazy] REQUEST",{tmdbId,mediaType,season,episode});
 
   const movie=mediaType==="movie";
-  let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="",episodeTitle="";
+  let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="";
 
   if(!movie){
     mappingResult=await dbMapping(tmdbId,season,episode);
@@ -474,8 +410,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     malEpisode=mapEp(m,episode);
     imdbId=mapImdb(m);
     malId=mapMalId(m);
-    seasonName=String(m.season_title||m.season_name||m.seasonName||"").trim();
-    episodeTitle=String(m.episode_title||m.episodeTitle||"").trim();
+    seasonName=String(m.season_title||m.season_name||m.seasonName||"");
 
 
   }else{
@@ -491,25 +426,9 @@ async function resolveStream(tmdbId,mediaType,season,episode){
   const specific=targetTitles.length?targetTitles:[title,...altTitles].filter(Boolean);
   const base=cleanQuery(title);
 
-  /*
-   * The mapping record is preferred. If it does not contain the literal
-   * season/episode titles, resolve those exact TMDB S/E records as a
-   * fallback. Start this request in parallel with AniZone search so it
-   * does not become an extra serial stream-discovery step.
-   */
-  let seasonInfoPromise=Promise.resolve(null);
-  if(!movie&&(!seasonName||!episodeTitle)){
-    seasonInfoPromise=getTmdbSeasonInfo(tmdbId,season,episode)
-  }
+  let cards=await searchCards(seasonName||base);
 
-  let cardsPromise=searchCards(base);
-  let [seasonInfo,cards]=await Promise.all([seasonInfoPromise,cardsPromise]);
-
-  if(seasonInfo){
-    seasonName=seasonName||seasonInfo.seasonName||"";
-    episodeTitle=episodeTitle||seasonInfo.episodeTitle||""
-  }
-
+  if(!cards.length&&seasonName)cards=await searchCards(base);
   if(!cards.length&&title!==base)cards=await searchCards(title);
 
   if(!cards.length){
@@ -524,7 +443,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     return[]
   }
 
-  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,season,seasonName,episodeTitle);
+  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,season,seasonName);
 
   if(!slug){
     console.log("[AniZone Lazy] CARD NOT FOUND",{title,season,results:cards.length});
