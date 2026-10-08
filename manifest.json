@@ -1,29 +1,8 @@
 {
   "name": "AniKoto-Nuvio",
   "version": "1.5.0",
-  "description": "AnimeOnsen, AniZone, AniKoto and Reanime providers with database-first unified mapping and original stream extraction",
+  "description": "AnimeOnsen, AniZone, Anikoto and Reanime providers with database-first unified mapping and original stream extraction",
   "scrapers": [
-    {
-      "id": "anikoto",
-      "name": "AniKotoTV",
-      "description": "AniKotoTV streams using the current mapping database; read-only mapper access and first-stream fast path",
-      "version": "1.0.0",
-      "author": "Nuvio Team",
-      "filename": "providers/anikoto.js",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
-      "enabled": true,
-      "formats": [
-        "m3u8"
-      ],
-      "logo": "https://www.google.com/s2/favicons?domain=megaplay.buzz&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
-    },
     {
       "id": "animeonsen",
       "name": "AnimeOnsen",
@@ -40,6 +19,27 @@
         "mpd"
       ],
       "logo": "https://www.google.com/s2/favicons?domain=animeonsen.xyz&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "anikoto",
+      "name": "Anikoto",
+      "description": "Anikoto streams using the existing mapping database in read-only mode with MegaPlay and VidTube extraction",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/anikoto.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8",
+        "mp4"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
       "contentLanguage": [
         "en",
         "ja"
