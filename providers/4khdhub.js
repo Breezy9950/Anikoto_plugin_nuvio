@@ -203,7 +203,6 @@ function onSettings() {
     }
   ];
 }
-
 function resolveSettings(input) {
   const LABEL_MAP = {
     fsl: "FSL",
@@ -218,9 +217,7 @@ function resolveSettings(input) {
     all: null,
     any: null
   };
-
-  let s = { sourceLabel: "FSL" }; // default
-
+  let s = { sourceLabel: "FSL" };
   try {
     let settings = input;
     if (!settings && typeof globalThis !== "undefined")
@@ -229,7 +226,6 @@ function resolveSettings(input) {
       settings = global.SCRAPER_SETTINGS || global.SETTINGS || global.settings;
     if (!settings && typeof window !== "undefined")
       settings = window.SCRAPER_SETTINGS || window.SETTINGS || window.settings;
-
     if (settings) {
       let raw = settings.source || settings.src || settings.preferred_source || "";
       if (typeof raw === "object" && raw !== null)
@@ -438,29 +434,13 @@ function extractHubCloud(hubCloudUrl, baseMeta) {
       if (!href)
         return;
       if (text.includes("10Gbps") || text.includes("PixelServer") || href.includes("hubcloud.cx")) {
-        results.push({
-          source: "HubCloud 10Gbps",
-          url: href,
-          meta: currentMeta
-        });
+        results.push({ source: "HubCloud 10Gbps", url: href, meta: currentMeta });
       } else if (text.includes("Download File") || href.includes("r2.dev")) {
-        results.push({
-          source: "Direct R2",
-          url: href,
-          meta: currentMeta
-        });
+        results.push({ source: "Direct R2", url: href, meta: currentMeta });
       } else if (text.includes("ZipDisk") || href.includes("workers.dev")) {
-        results.push({
-          source: "ZipDisk Server",
-          url: href,
-          meta: currentMeta
-        });
+        results.push({ source: "ZipDisk Server", url: href, meta: currentMeta });
       } else if (text.includes("FSL")) {
-        results.push({
-          source: "FSL",
-          url: href,
-          meta: currentMeta
-        });
+        results.push({ source: "FSL", url: href, meta: currentMeta });
       }
     });
     return results;
@@ -544,15 +524,11 @@ function getStreams(tmdbId, type, season, episode, settings) {
       $(".episode-item").each((_, el) => {
         if ($(".episode-title", el).text().includes(seasonStr)) {
           const downloadItems = $(".episode-download-item", el).filter((_2, item) => $(item).text().includes(episodeStr));
-          downloadItems.each((_2, item) => {
-            itemsToProcess.push(item);
-          });
+          downloadItems.each((_2, item) => { itemsToProcess.push(item); });
         }
       });
     } else {
-      $(".download-item").each((_, el) => {
-        itemsToProcess.push(el);
-      });
+      $(".download-item").each((_, el) => { itemsToProcess.push(el); });
     }
     console.log(`[4KHDHub] Processing ${itemsToProcess.length} items`);
 
@@ -574,17 +550,17 @@ function getStreams(tmdbId, type, season, episode, settings) {
           }
           return extractedLinks.map((link) => {
             const height = sourceResult.meta.height || 0;
-            const qualityFull = height === 2160 ? "2160p" : height ? height + "p" : "";
             const qualityShort = height === 2160 ? "4K" : height ? height + "p" : "";
 
+            // Stream name — quality stays here, that's the only place it shows
             const name = qualityShort ? `4KHDHub ${qualityShort}` : "4KHDHub";
 
             const info = parseReleaseInfo(link.meta.title);
 
+            // Tag line: provider (source) first, then source type, codec, hdr
             const tagParts = [];
-            if (qualityFull) tagParts.push(qualityFull);
+            if (link.source) tagParts.push(link.source);
             if (info.source) tagParts.push(info.source);
-            else if (link.source) tagParts.push(link.source);
             if (info.codec) tagParts.push(info.codec);
             if (info.hdr) tagParts.push(info.hdr);
             if (info.dv) tagParts.push("DV");
@@ -608,7 +584,10 @@ function getStreams(tmdbId, type, season, episode, settings) {
               size: description,
               description,
               url: link.url,
-              quality: qualityFull || void 0,
+              // NOTE: no `quality` field → Nuvio won't prefix it before the title
+              // Sort helpers (stripped before returning)
+              __qr: height,
+              __sb: link.meta.bytes || 0,
               behaviorHints: {
                 bingeGroup: `4khdhub-${link.source}`
               }
@@ -624,18 +603,18 @@ function getStreams(tmdbId, type, season, episode, settings) {
     const results = yield Promise.all(streamPromises);
     const flat = results.reduce((acc, val) => acc.concat(val), []);
 
-    // ---- Visibility filter (driven by Nuvio setting) ----
+    // Visibility filter
     const visible = resolved.sourceLabel
       ? flat.filter(r => r.behaviorHints && r.behaviorHints.bingeGroup === `4khdhub-${resolved.sourceLabel}`)
       : flat;
     console.log(`[4KHDHub] Filter (${resolved.sourceLabel || "all"}): ${visible.length}/${flat.length}`);
 
-    // ---- Dedupe ----
+    // Dedupe (name includes quality, description has the rest)
     const seen = new Set();
     const deduped = [];
     for (const r of visible) {
       const key = [
-        r.quality || "",
+        r.name || "",
         (r.description || "").replace(/\n/g, "|")
       ].join("::");
       if (seen.has(key)) continue;
@@ -643,6 +622,19 @@ function getStreams(tmdbId, type, season, episode, settings) {
       deduped.push(r);
     }
     console.log(`[4KHDHub] After dedupe: ${deduped.length}/${visible.length} kept`);
+
+    // Sort: quality rank desc, then size desc
+    // (e.g. 8 GB 4K stays above 40 GB 1080p — quality wins)
+    deduped.sort((a, b) => {
+      if (b.__qr !== a.__qr) return b.__qr - a.__qr;
+      return b.__sb - a.__sb;
+    });
+
+    // Strip sort helpers before returning
+    for (const r of deduped) {
+      delete r.__qr;
+      delete r.__sb;
+    }
     return deduped;
   });
 }
