@@ -19,6 +19,25 @@ async function json(url,opt={},timeout=TIMEOUT){
   try{return await r.json()}catch(e){return null}
 }
 
+const _TMDB_ID_CACHE=new Map();
+async function resolveTmdbId(id,type){
+  id=String(id||"").trim();
+  if(/^\d+$/.test(id))return id;
+  if(!/^tt\d+$/i.test(id))return id;
+  const key=String(type||"tv").toLowerCase()+":"+id;
+  if(_TMDB_ID_CACHE.has(key))return _TMDB_ID_CACHE.get(key);
+  const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results";
+  const u="https://api.themoviedb.org/3/find/"+encodeURIComponent(id)+"?api_key="+TMDB_API_KEY+"&external_source=imdb_id";
+  let result=id;
+  try{
+    const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},4000);
+    const a=d&&Array.isArray(d[t])?d[t]:[];
+    if(a[0]&&a[0].id)result=String(a[0].id);
+  }catch(e){}
+  _TMDB_ID_CACHE.set(key,result);
+  return result;
+}
+
 function attrs(s){
   const o={};
   String(s||"").replace(/([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g,(m,k,a,b,c)=>{o[k]=a!=null?a:b!=null?b:c!=null?c:"";return m});
@@ -371,8 +390,8 @@ function cleanQuery(s){
 }
 
 async function resolveStream(tmdbId,mediaType,season,episode){
-  tmdbId=String(tmdbId||"").trim();
   mediaType=String(mediaType||"tv").toLowerCase();
+  tmdbId=await resolveTmdbId(String(tmdbId||"").trim(),mediaType);
   season=Number(season)||1;
   episode=Number(episode)||1;
   if(!tmdbId){
