@@ -522,11 +522,15 @@ function getStreams(tmdbId, type, season, episode, settings) {
       });
     }
 
-    // ---- Assign visible rank prefix (survives Nuvio's alphabetical sort) ----
+   // ---- Assign invisible sort prefix using Unicode Variation Selectors ----
+    // VS1..VS16 (U+FE00-U+FE0F) + VS17..VS256 (U+E0100-U+E01EF) = 256 levels
+    // Invisible, zero-width, and their codepoints ascend with rank.
     for (let i = 0; i < deduped.length; i++) {
       const r = deduped[i];
-      const rank = String(i + 1).padStart(2, "0");
-      r.name = `${rank} · ${r.name}`;
+      let prefix = "";
+      if (i < 16) prefix = String.fromCodePoint(0xFE00 + i);
+      else if (i < 256) prefix = String.fromCodePoint(0xE0100 + (i - 16));
+      r.name = prefix + r.name;
       delete r.__qr;
       delete r.__sb;
     }
