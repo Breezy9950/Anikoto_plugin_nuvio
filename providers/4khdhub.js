@@ -556,7 +556,24 @@ function getStreams(tmdbId, type, season, episode) {
       }
     }));
     const results = yield Promise.all(streamPromises);
-    return results.reduce((acc, val) => acc.concat(val), []);
+    const flat = results.reduce((acc, val) => acc.concat(val), []);
+
+    // Dedupe: same quality + same size + same source/codec/audio = same stream.
+    // Keeps the first one seen; URL is intentionally ignored because the whole
+    // point is that different links point to the same file.
+    const seen = new Set();
+    const deduped = [];
+    for (const r of flat) {
+      const key = [
+        r.quality || "",
+        (r.description || "").replace(/\n/g, "|")
+      ].join("::");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(r);
+    }
+    console.log(`[4KHDHub] After dedupe: ${deduped.length}/${flat.length} streams kept`);
+    return deduped;
   });
 }
 module.exports = { getStreams };
