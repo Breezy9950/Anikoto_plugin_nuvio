@@ -132,7 +132,7 @@ function parseHTML(html){
 }
 function all(root,selector){
   const out=[],sel=String(selector||"").trim();
-  const am=sel.match(/^$begin:math:display$\(\[\^\=$end:math:display$]+)\]$/);
+  const am=sel.match(/^\[([^\]=]+)\]$/);
   if(am){
     const key=am[1].toLowerCase();
     (function visitAttr(n){
