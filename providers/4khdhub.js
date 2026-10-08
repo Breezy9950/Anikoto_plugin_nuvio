@@ -40,11 +40,15 @@ var __async = (__this, __arguments, generator) => {
 };
 
 // ============================================================
-// SPEED LAYER — 10s timeout + dedupe identical in-flight fetches
+// SPEED LAYER — Promise.race hard timeout + in-flight dedupe.
+// AbortController.signal is silently ignored by Nuvio's runtime,
+// so we race the real fetch against a timer instead. The
+// underlying fetch keeps running in the background; we just
+// stop waiting and let the caller retry (LiteSpeed cache warm).
 // ============================================================
 var _nativeFetch = globalThis.fetch;
 var _fetchCache = new Map();
-var REQUEST_TIMEOUT_MS = 10000;
+var REQUEST_TIMEOUT_MS = 12000;
 
 globalThis.fetch = function _cachedTimedFetch(url, opts) {
   var method = (opts && opts.method) || "GET";
@@ -55,18 +59,18 @@ globalThis.fetch = function _cachedTimedFetch(url, opts) {
 
   if (_fetchCache.has(key)) return _fetchCache.get(key);
 
-  var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-  var merged = __spreadValues({}, opts || {});
-  if (ctrl) merged.signal = ctrl.signal;
-  var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, REQUEST_TIMEOUT_MS) : null;
+  var timed = Promise.race([
+    _nativeFetch(url, opts),
+    new Promise(function (_, reject) {
+      setTimeout(function () {
+        reject(new Error("timeout " + REQUEST_TIMEOUT_MS + "ms: " + url));
+      }, REQUEST_TIMEOUT_MS);
+    })
+  ]);
 
-  var p = _nativeFetch(url, merged).then(
-    function (r) { if (timer) clearTimeout(timer); return r; },
-    function (e) { if (timer) clearTimeout(timer); throw e; }
-  );
-  _fetchCache.set(key, p);
-  p.catch(function () { _fetchCache.delete(key); });
-  return p;
+  _fetchCache.set(key, timed);
+  timed.catch(function () { _fetchCache.delete(key); });
+  return timed;
 };
 
 var BASE_URL = "https://4khdhub.click";
@@ -439,7 +443,7 @@ function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
       const $ = cheerio2.load(html);
       const links = [...new Set($("h3 a, h5 a, div.entry-content p a, div.entry-content a").map((_, el) => $(el).attr("href")).get().filter(Boolean))];
 
-      // Resolve every link in parallel instead of serially
+      // Resolve every link in parallel
       const resolvedPairs = yield Promise.all(links.map((rawLink) => __async(this, null, function* () {
         try {
           const absoluteLink = new URL(rawLink, hblinksUrl).toString();
