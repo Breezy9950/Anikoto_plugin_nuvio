@@ -10,19 +10,11 @@
       "version": "1.1.0",
       "author": "Nuvio Team",
       "filename": "providers/animeonsen.js",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
+      "supportedTypes": ["movie", "tv"],
       "enabled": true,
-      "formats": [
-        "mpd"
-      ],
+      "formats": ["mpd"],
       "logo": "https://www.google.com/s2/favicons?domain=animeonsen.xyz&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
+      "contentLanguage": ["en", "ja"]
     },
     {
       "id": "anikoto",
@@ -31,19 +23,11 @@
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/anikoto.js",
-      "supportedTypes": [
-        "tv"
-      ],
+      "supportedTypes": ["tv"],
       "enabled": true,
-      "formats": [
-        "m3u8",
-        "mp4"
-      ],
+      "formats": ["m3u8", "mp4"],
       "logo": "https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
+      "contentLanguage": ["en", "ja"]
     },
     {
       "id": "anizone-lazy",
@@ -52,19 +36,11 @@
       "version": "1.1.0",
       "author": "Nuvio Team",
       "filename": "providers/anizone-lazy.js",
-      "supportedTypes": [
-        "movie",
-        "tv"
-      ],
+      "supportedTypes": ["movie", "tv"],
       "enabled": true,
-      "formats": [
-        "m3u8"
-      ],
+      "formats": ["m3u8"],
       "logo": "https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
+      "contentLanguage": ["en", "ja"]
     },
     {
       "id": "reanime",
@@ -73,19 +49,24 @@
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/reanime.js",
-      "supportedTypes": [
-        "tv",
-        "movie"
-      ],
+      "supportedTypes": ["tv", "movie"],
       "enabled": true,
-      "formats": [
-        "mkv"
-      ],
+      "formats": ["mkv"],
       "logo": "https://www.google.com/s2/favicons?domain=reanime.to&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
+      "contentLanguage": ["en", "ja"]
+    },
+    {
+      "id": "4khdhub",
+      "name": "4KHDHub",
+      "description": "4KHDHub direct R2-hosted streams with ShowBox-style descriptions and quality/size sorting",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/4khdhub.js",
+      "supportedTypes": ["movie", "tv"],
+      "enabled": true,
+      "formats": ["mp4", "mkv"],
+      "logo": "https://www.google.com/s2/favicons?domain=4khdhub.one&sz=128",
+      "contentLanguage": ["en", "hi"]
     }
   ]
 }
