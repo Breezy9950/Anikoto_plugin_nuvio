@@ -7,7 +7,6 @@
 const BASE="https://anikototv.to";
 const AJAX=BASE+"/ajax";
 const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping";
-const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 const UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
 const AJAX_HEADERS={
   "Referer":BASE+"/",
@@ -170,21 +169,6 @@ function hasClass(n,c){return String(attr(n,"class")).split(/\s+/).indexOf(c)>=0
 function directChildren(n){return(n&&n.children||[]).filter(x=>x&&x.tag!=="#text")}
 
 /* ---------- Read-only target mapper ---------- */
-async function tmdbMovieInfo(tmdbId){
-  const key="anikoto:tmdb:movie:"+tmdbId;
-  return memo(key,86400000,async()=>{
-    const u="https://api.themoviedb.org/3/movie/"+encodeURIComponent(tmdbId)+"?api_key="+encodeURIComponent(TMDB_API_KEY)+"&language=en-US";
-    const d=await getJson(u,{headers:{"Accept":"application/json","User-Agent":UA}},7000);
-    if(!d||!d.id)return null;
-    return{
-      id:String(d.id),
-      title:String(d.title||d.name||"").trim(),
-      originalTitle:String(d.original_title||d.original_name||"").trim(),
-      releaseDate:String(d.release_date||"").trim()
-    }
-  })
-}
-
 async function mapperLookup(tmdbId,season,episode){
   const u=MAPPING_URL
     +"?tmdb_id="+encodeURIComponent(tmdbId)
@@ -307,43 +291,6 @@ async function search(query){
 function absoluteUrl(href){
   try{return new URL(href,BASE+"/").toString()}catch(e){return BASE+(String(href||"").startsWith("/")?href:"/"+href)}
 }
-async function findMovie(info){
-  const rawQueries=[info&&info.title,info&&info.originalTitle].filter(Boolean);
-  const queries=[...new Set(rawQueries.flatMap(q=>{
-    const b=searchTitleBase(q);
-    return b&&b!==q?[q,b]:[q]
-  }).map(x=>String(x||"").trim()).filter(Boolean))].slice(0,6);
-  if(!queries.length)return null;
-  const allCards=[],seen=new Set();
-  const results=await settle(queries.map(q=>()=>search(q)),3);
-  for(const rs of results)for(const c of rs||[]){
-    const key=String(c.href);
-    if(!seen.has(key)){seen.add(key);allCards.push(c)}
-  }
-  if(!allCards.length)return null;
-  const targets=queries,base=info.title||info.originalTitle||"";
-  const scored=allCards.map(c=>{
-    const ct=normalizeTitle(c.name),cb=normalizeTitle(base);
-    let score=0;
-    for(const t of targets){
-      const nt=normalizeTitle(t);
-      if(!nt)continue;
-      if(ct===nt)score=Math.max(score,1200);
-      else if(ct.includes(nt)||nt.includes(ct))score=Math.max(score,850);
-      else{
-        const nb=normalizeTitle(searchTitleBase(t));
-        if(nb&&(ct===nb||ct.includes(nb)||nb.includes(ct)))score=Math.max(score,700)
-      }
-    }
-    if(/\b(?:season|saison)\s*\d+\b|\b\d+(?:st|nd|rd|th)\s+season\b/i.test(c.name))score-=900;
-    return{c,score}
-  }).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
-  const best=scored[0];
-  if(!best)return null;
-  log("MOVIE MATCH "+best.c.name+" score="+best.score);
-  return best.c
-}
-
 async function findAnime(mapping,season){
   const rawQueries=[mapping.title,...mapping.titles].filter(Boolean);
   const queries=[];
@@ -900,62 +847,9 @@ async function resolveMode(episodeId,isDub,quality){
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase();
-    if(type!=="tv"&&type!=="movie")return[];
-    const id=String(tmdbId||"").trim();
+    if(type!=="tv")return[];
+    const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1;
     if(!id)return[];
-
-    if(type==="movie"){
-      const key="anikoto:movie-streams:"+id+":"+JSON.stringify(settings||{});
-      const hit=CACHE.get(key);
-      if(hit!==undefined)return await Promise.resolve(hit);
-      const p=(async()=>{
-        const started=Date.now();
-        log("REQUEST MOVIE TMDB="+id);
-        const info=await tmdbMovieInfo(id);
-        if(!info||!info.title){
-          log("MOVIE TMDB LOOKUP FAILED");
-          return[]
-        }
-        const animeResult=await findMovie(info);
-        if(!animeResult){
-          log("MOVIE MATCH FAILED");
-          return[]
-        }
-        const animeUrl=absoluteUrl(animeResult.href);
-        const animeId=await getAnimeId(animeUrl);
-        if(!animeId)return[];
-        const episodes=await getEpisodes(animeId);
-        const episodeMatch=episodes.find(x=>x.episodeNumber===1)||episodes[0];
-        if(!episodeMatch){
-          log("MOVIE EPISODE MATCH FAILED");
-          return[]
-        }
-        log("MOVIE CONTENT MATCH E"+episodeMatch.episodeNumber+" ID="+episodeMatch.episodeId);
-        const modesList=modes(settings);
-        const modeResults=await Promise.all(
-          modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings)))
-        );
-        const allStreams=modeResults.flat(),seen=new Set(),out=[];
-        for(const stream of allStreams){
-          if(!stream||!stream.url||seen.has(stream.url))continue;
-          seen.add(stream.url);
-          out.push(stream)
-        }
-        log("MOVIE DONE streams="+out.length+" time="+(Date.now()-started)+"ms");
-        return out
-      })();
-      CACHE.set(key,p,1800000);
-      try{
-        const v=await p;
-        return CACHE.set(key,v,1800000)
-      }catch(e){
-        CACHE.delete(key);
-        log("MOVIE ERROR "+String(e&&e.message||e));
-        return[]
-      }
-    }
-
-    const seasonNumber=Number(season),s=Number.isInteger(seasonNumber)&&seasonNumber>=0?seasonNumber:1,e=Number(episode)||1;
     const key="anikoto:streams:"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
     const hit=CACHE.get(key);
     if(hit!==undefined)return await Promise.resolve(hit);
