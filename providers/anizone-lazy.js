@@ -167,60 +167,120 @@ function normalize(s){
   return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,"").trim()
 }
 
+function seasonNumberFromText(value){
+  const s=String(value||"").toLowerCase();
+  if(/\b(?:season|saison)\s*([0-9]+)\b/.test(s))return Number(s.match(/\b(?:season|saison)\s*([0-9]+)\b/)[1]);
+  if(/\b([0-9]+)(?:st|nd|rd|th)\s+season\b/.test(s))return Number(s.match(/\b([0-9]+)(?:st|nd|rd|th)\s+season\b/)[1]);
+  if(/\bpart\s*([0-9]+)\b/.test(s))return Number(s.match(/\bpart\s*([0-9]+)\b/)[1]);
+  const roman={"i":1,"ii":2,"iii":3,"iv":4,"v":5,"vi":6,"vii":7,"viii":8,"ix":9,"x":10};
+  const rm=s.match(/(?:^|[\s\-:])(?:season\s*)?(i{1,3}|iv|v|vi{0,3}|ix|x)(?:$|[\s\-:])/i);
+  if(rm&&roman[String(rm[1]).toLowerCase()])return roman[String(rm[1]).toLowerCase()];
+  return null
+}
+
 function seasonRules(season){
   const s=Number(season)||1;
-  if(s===1)return{mustNot:[
-    /season\s*[2-9]/i,
-    /saison\s*[2-9]/i,
-    /[\s\-][iI]{2,}/,
-    /\s+[2-9]nd/i,
-    /\s+[2-9]rd/i,
-    /\s+[2-9]th/i,
-    /\s+ii\b/i,
-    /\s+iii\b/i,
-    /\s+iv\b/i,
-    /\s+v\b/i,
-    /movie/i,
-    /gekijouban/i,
-    /the movie/i
-  ]};
-  if(s===2)return{must:[/season\s*2/i,/saison\s*2/i,/2nd\s*season/i,/[\s\-]ii\b/i,/\b2\b/]};
-  if(s===3)return{must:[/season\s*3/i,/saison\s*3/i,/3rd\s*season/i,/[\s\-]iii\b/i,/\b3\b/]};
-  if(s===4)return{must:[/season\s*4/i,/saison\s*4/i,/4th\s*season/i,/[\s\-]iv\b/i,/\b4\b/,/final\s*season/i]};
-  return{must:[
-    new RegExp("(?:season|saison)\\s*"+s,"i"),
-    new RegExp("\\b"+s+"\\b")
-  ]}
+  return{
+    positive:[
+      new RegExp("\\bseason\\s*"+s+"\\b","i"),
+      new RegExp("\\bsaison\\s*"+s+"\\b","i"),
+      new RegExp("\\b"+s+"(?:st|nd|rd|th)\\s+season\\b","i"),
+      new RegExp("\\bpart\\s*"+s+"\\b","i")
+    ],
+    roman:s===1?/[\s\-:]\bi\b/i:s===2?/[\s\-:]\bii\b/i:s===3?/[\s\-:]\biii\b/i:s===4?/[\s\-:]\biv\b/i:null
+  }
+}
+
+function candidateExplicitSeason(c){
+  const values=[...cardTitles(c),cardSlug(c)];
+  for(const value of values){
+    const n=seasonNumberFromText(value);
+    if(n!=null)return n
+  }
+  return null
+}
+
+function seasonTitleMatch(c,seasonName,season){
+  const sn=normalize(seasonName);
+  if(!sn||sn===normalize("season "+season)||sn===normalize("s"+season))return false;
+  return cardTitles(c).some(t=>{
+    const n=normalize(t);
+    return n===sn||n.includes(sn)||sn.includes(n)
+  })
 }
 
 function matchCard(cards,targetTitles,baseTitle,season=1,seasonName=""){
-  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))],base=normalize(baseTitle),sn=normalize(seasonName),s=Number(season)||1;
-  if(sn&&sn!=="season"+s){
-    for(const c of cards)for(const t of cardTitles(c)){
-      const n=normalize(t);
-      if(n===sn||n.includes(sn))return c.slug
-    }
-  }
+  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))];
+  const base=normalize(baseTitle);
+  const s=Number(season)||1;
   const rules=seasonRules(s);
+
+  console.log("[AniZone Lazy] SEASON MATCH START",{requestedSeason:s,seasonTitle:seasonName||"",candidates:cards.length});
+
+  const scored=[];
   for(const c of cards){
-    const titles=cardTitles(c);
-    let baseMatch=false;
-    for(const t of titles){
+    const titles=cardTitles(c),slug=cardSlug(c);
+    const display=titles.length?titles.join(" | "):slug;
+    const baseMatch=base&&titles.some(t=>{
       const n=normalize(t);
-      if(!base||n.includes(base)||base.includes(n)){baseMatch=true;break}
+      return n===base||n.includes(base)||base.includes(n)
+    });
+    if(!baseMatch){
+      console.log("[AniZone Lazy] CANDIDATE REJECTED",{slug,titles:display,reason:"base-title-mismatch"});
+      continue
     }
-    if(!baseMatch)continue;
+
+    const explicitSeason=candidateExplicitSeason(c);
     if(s===1){
-      if(rules.mustNot.some(r=>titles.some(t=>r.test(t))))continue;
-      for(const target of targets)for(const t of titles)if(normalize(t)===target)return c.slug;
-      return c.slug
+      if(explicitSeason!=null&&explicitSeason!==1){
+        console.log("[AniZone Lazy] CANDIDATE REJECTED",{slug,titles:display,reason:"wrong-season",candidateSeason:explicitSeason,requestedSeason:s});
+        continue
+      }
+      if(/(?:movie|gekijouban|film)\b/i.test(display)){
+        console.log("[AniZone Lazy] CANDIDATE REJECTED",{slug,titles:display,reason:"movie"});
+        continue
+      }
+      let score=20;
+      if(seasonTitleMatch(c,seasonName,s))score+=100;
+      if(targets.some(target=>titles.some(t=>normalize(t)===target)))score+=50;
+      if(explicitSeason===1)score+=30;
+      scored.push({c,score,reason:explicitSeason===1?"explicit-season-1":"base-anime-season-1"})
+      continue
     }
-    if(titles.some(t=>rules.must.some(r=>r.test(t))))return c.slug
+
+    if(explicitSeason===s){
+      let score=100;
+      if(seasonTitleMatch(c,seasonName,s))score+=100;
+      if(targets.some(target=>titles.some(t=>normalize(t)===target)))score+=25;
+      scored.push({c,score,reason:"explicit-season"})
+      continue
+    }
+
+    if(explicitSeason!=null&&explicitSeason!==s){
+      console.log("[AniZone Lazy] CANDIDATE REJECTED",{slug,titles:display,reason:"wrong-season",candidateSeason:explicitSeason,requestedSeason:s});
+      continue
+    }
+
+    if(seasonTitleMatch(c,seasonName,s)){
+      scored.push({c,score:90,reason:"season-title"})
+      continue
+    }
+
+    const ruleHit=titles.some(t=>rules.positive.some(r=>r.test(t)))||
+      (rules.roman&&titles.some(t=>rules.roman.test(t)));
+    if(ruleHit){
+      scored.push({c,score:80,reason:"season-pattern"})
+      continue
+    }
+
+    console.log("[AniZone Lazy] CANDIDATE REJECTED",{slug,titles:display,reason:"no-season-evidence",requestedSeason:s})
   }
-  if(s===1){
-    for(const target of targets)for(const c of cards)for(const t of cardTitles(c))if(normalize(t)===target)return c.slug
-  }
-  return null
+
+  scored.sort((a,b)=>b.score-a.score);
+  if(!scored.length)return null;
+  const best=scored[0];
+  console.log("[AniZone Lazy] CANDIDATE MATCHED",{slug:cardSlug(best.c),season:s,reason:best.reason,score:best.score});
+  return cardSlug(best.c)
 }
 
 function matchMovieCard(cards,targetTitles){
@@ -412,6 +472,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     malId=mapMalId(m);
     seasonName=String(m.season_title||m.season_name||m.seasonName||"");
 
+    console.log("[AniZone Lazy] MAPPED",{malId,malEpisode,animeTitle:title,requestedSeason:season,mappedSeason:Number(m.season||m.tmdb_season||season),tvdbSeason:Number(m.tvdb_season||season),seasonTitle:seasonName||""});
 
   }else{
     const info=await getTmdbInfo(tmdbId,"movie");
@@ -426,16 +487,21 @@ async function resolveStream(tmdbId,mediaType,season,episode){
   const specific=targetTitles.length?targetTitles:[title,...altTitles].filter(Boolean);
   const base=cleanQuery(title);
 
-  let cards=await searchCards(seasonName||base);
+  const queries=[...new Set([
+    base,
+    title,
+    ...targetTitles,
+    ...altTitles.map(t=>String(t||"").split(":")[0].trim())
+  ].map(q=>String(q||"").trim()).filter(Boolean))];
 
-  if(!cards.length&&seasonName)cards=await searchCards(base);
-  if(!cards.length&&title!==base)cards=await searchCards(title);
-
-  if(!cards.length){
-    for(const t of altTitles){
-      cards=await searchCards(t.split(":")[0].trim());
-      if(cards.length)break
+  let cards=[];
+  for(const q of queries){
+    const found=await searchCards(q);
+    for(const card of found){
+      const key=cardSlug(card);
+      if(key&&!cards.some(x=>cardSlug(x)===key))cards.push(card)
     }
+    if(cards.length)console.log("[AniZone Lazy] SEARCH QUERY HIT",{query:q,results:found.length,total:cards.length})
   }
 
   if(!cards.length){
