@@ -1,6 +1,23 @@
 const{getStore}=require("@netlify/blobs");
 const STORE="anime-resolution-cache",LEGACY_LAZY_STORE="anime-lazy-resolution",TVDB_PREFIX="_shinkro:tvdb:",INDEX_KEY="_shinkro_index",MANIFEST_KEY="_shinkro:manifest",TMDB_TVDB_PREFIX="_tmdb_tvdb_",MAX_ID=50,MAX_EP=100000,MAX_WINDOW=12,LOCK_TTL=2*60*1000,TIMEOUT=6000,CONCURRENCY=4,TMDB_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706";
 const MAX_MAPPING_WAIT=4500,MAPPING_POLL_MS=300;
+const _IMDB_TO_TMDB_CACHE=new Map();
+async function imdbToTmdb(imdb){
+imdb=String(imdb||"").trim();
+if(!/^tt\d+$/i.test(imdb))return null;
+if(_IMDB_TO_TMDB_CACHE.has(imdb))return _IMDB_TO_TMDB_CACHE.get(imdb);
+try{
+const u="https://api.themoviedb.org/3/find/"+encodeURIComponent(imdb)+"?api_key="+encodeURIComponent(TMDB_KEY)+"&external_source=imdb_id";
+const r=await fetchJson(u,6000);
+if(!r||r.state!=="HIT"||!r.data){_IMDB_TO_TMDB_CACHE.set(imdb,null);return null}
+const tv=r.data.tv_results&&r.data.tv_results[0];
+if(tv&&tv.id){const id=String(tv.id);_IMDB_TO_TMDB_CACHE.set(imdb,id);return id}
+const mv=r.data.movie_results&&r.data.movie_results[0];
+if(mv&&mv.id){const id=String(mv.id);_IMDB_TO_TMDB_CACHE.set(imdb,id);return id}
+_IMDB_TO_TMDB_CACHE.set(imdb,null);
+return null
+}catch(e){return null}
+}
 function log(x){console.log(`[ANIME LAZY MAPPING] ${x}`)}
 function json(status,body){return{statusCode:status,headers:{"Content-Type":"application/json","Cache-Control":"no-store","Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET,OPTIONS","Access-Control-Allow-Headers":"Content-Type"},body:JSON.stringify(body)}}
 function num(v,max=MAX_EP){const n=Number(v);return Number.isInteger(n)&&n>=0&&n<=max?n:null}
@@ -537,8 +554,14 @@ const started=Date.now(),method=(event.httpMethod||"GET").toUpperCase();
 if(method==="OPTIONS")return json(204,{});
 if(method!=="GET")return json(405,{ok:false,error:"Method not allowed"});
 try{
-const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode);
-log(`REQUEST TMDB=${id} S${p.season}E${p.episode}`);
+const p=event.queryStringParameters||{},rawId=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode);
+log(`REQUEST TMDB=${rawId} S${p.season}E${p.episode}`);
+let id=rawId;
+if(/^tt\d+$/i.test(id)){
+const converted=await imdbToTmdb(id);
+if(converted){log(`IMDB->TMDB ${id} -> ${converted}`);id=converted}
+else{log(`IMDB->TMDB FAILED for ${id}`);return json(404,{ok:false,error:"IMDb ID not found on TMDB"})}
+}
 if(!/^\d+$/.test(id)||id.length>MAX_ID||s===null||!e)return json(400,{ok:false,error:"tmdbId, season and episode are required"});
 const hit=await sharedLookup(id,s,e);
 if(hit){
