@@ -1,8 +1,26 @@
-const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
+const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
 function log(x){console.log("[AniZone] "+x)}
 async function req(url,opt){opt=opt||{};const c=new AbortController(),t=setTimeout(()=>c.abort(),15000);try{return await fetch(url,Object.assign({},opt,{signal:c.signal}))}finally{clearTimeout(t)}}
 async function text(url,opt){try{const r=await req(url,opt);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.text()}catch(e){log("Request failed "+url+": "+e.message);return null}}
 async function json(url,opt){try{const r=await req(url,opt);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.json()}catch(e){log("JSON request failed "+url+": "+e.message);return null}}
+const _TMDB_ID_CACHE=new Map();
+async function resolveTmdbId(id,type){
+  id=String(id||"").trim();
+  if(/^\d+$/.test(id))return id;
+  if(!/^tt\d+$/i.test(id))return id;
+  const key=String(type||"tv").toLowerCase()+":"+id;
+  if(_TMDB_ID_CACHE.has(key))return _TMDB_ID_CACHE.get(key);
+  const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results";
+  const u="https://api.themoviedb.org/3/find/"+encodeURIComponent(id)+"?api_key="+TMDB_API_KEY+"&external_source=imdb_id";
+  let result=id;
+  try{
+    const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}});
+    const a=d&&Array.isArray(d[t])?d[t]:[];
+    if(a[0]&&a[0].id)result=String(a[0].id);
+  }catch(e){}
+  _TMDB_ID_CACHE.set(key,result);
+  return result;
+}
 function attrs(s){const o={};let i=0,n=String(s||"");while(i<n.length){while(i<n.length&&/[\s\/]/.test(n[i]))i++;let k="";while(i<n.length&&/[^\s=\/>]/.test(n[i]))k+=n[i++];if(!k)break;while(i<n.length&&/\s/.test(n[i]))i++;let v="";if(n[i]==="="){i++;while(i<n.length&&/\s/.test(n[i]))i++;if(n[i]==='"'||n[i]==="'"){const q=n[i++];while(i<n.length&&n[i]!==q)v+=n[i++];if(n[i]===q)i++}else while(i<n.length&&!/[\s>]/.test(n[i]))v+=n[i++]}o[k.toLowerCase()]=v}return o}
 const VOID={area:1,base:1,br:1,col:1,embed:1,hr:1,img:1,input:1,link:1,meta:1,param:1,source:1,track:1,wbr:1};
 function unesc(s){return String(s||"").replace(/&nbsp;/gi," ").replace(/&amp;/gi,"&").replace(/&quot;/gi,'"').replace(/&#39;|&apos;/gi,"'").replace(/&lt;/gi,"<").replace(/&gt;/gi,">").replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(+n)).replace(/&#x([0-9a-f]+);/gi,(_,n)=>String.fromCharCode(parseInt(n,16)))}
@@ -38,5 +56,5 @@ async function findAnime(m){
 }
 async function getEpisodes(alias){const html=await text(alias,{headers:{"Accept":"text/html,application/xhtml+xml","User-Agent":UA}});if(!html)return[];const root=parseHTML(html),main=first(root,"main");if(!main)return[];const kids=children(main);if(!kids.length)return[];const data=dataAttr(kids[0],"x-data"),m=/items:\s*JSON\.parse\('(.+?)'\)/s.exec(data||"");if(!m){log("Episodes: JSON.parse items not found");return[]}const list=decodeJSON(m[1]);if(!Array.isArray(list))return[];const out=[];let i=1;for(const item of list){if(!item||!item.url)continue;out.push({episodeLink:String(item.url).replace(/\\/g,""),episodeNumber:i,thumbnail:item.snapshot?String(item.snapshot).replace(/\\/g,""):"",episodeTitle:item.title_list&&item.title_list["1"],isFiller:String(item.type||"").toLowerCase()==="filler",hasDub:false});i++}log("Episodes: parsed "+out.length);return out}
 async function getEpisodeStream(episodeUrl){const html=await text(episodeUrl,{headers:{"Accept":"text/html,application/xhtml+xml","User-Agent":UA}});if(!html)return null;const root=parseHTML(html),div=first(root,"div.mb-8");if(!div)return null;const kids=children(div);if(!kids.length)return null;const data=dataAttr(kids[0],"x-data"),parsed=extractJSONParse(data);if(!parsed||!parsed.src){log("Stream: source not found");return null}const src=String(parsed.src).replace(/\\/g,""),subs=Array.isArray(parsed.subtitles)?parsed.subtitles:[],en=subs.find(x=>x&&x.language==="en"&&x.default===true),subtitleList=subs.map(x=>({url:x&&x.file?String(x.file).replace(/\\/g,""):"",name:x&&x.title||x&&x.language||"English",language:x&&x.language||"en"})).filter(x=>x.url),button=first(root,"button.flex.gap-2.relative");return{name:"AniZone",title:"AniZone • "+(button?nodeText(button):"Default"),url:src,quality:"multi-quality",headers:{"Referer":BASE+"/","User-Agent":UA},subtitle:en&&en.file?String(en.file).replace(/\\/g,""):"",subtitleFormat:en&&en.format?String(en.format):"",subtitles:subtitleList,backup:false}}
-async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const m=await mapping(tmdbId,season,episode);if(!m){log("No mapping");return[]}log("Mapping -> MAL "+m.malId+" E"+m.malEpisode+" "+m.title);const anime=await findAnime(m);if(!anime){log("Anime not found");return[]}log("Selected -> "+anime.name+" "+anime.alias);const eps=await getEpisodes(anime.alias);if(!eps.length){log("No episodes");return[]}const ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("MAL episode "+m.malEpisode+" not found in AniZone episode list ("+eps.length+" episodes)");return[]}log("Mapped episode -> "+ep.episodeNumber+" "+ep.episodeLink);const stream=await getEpisodeStream(ep.episodeLink);return stream?[stream]:[]}catch(e){log("Fatal: "+e.message);return[]}}
+async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const mappedId=await resolveTmdbId(tmdbId,mediaType);const m=await mapping(mappedId,season,episode);if(!m){log("No mapping");return[]}log("Mapping -> MAL "+m.malId+" E"+m.malEpisode+" "+m.title);const anime=await findAnime(m);if(!anime){log("Anime not found");return[]}log("Selected -> "+anime.name+" "+anime.alias);const eps=await getEpisodes(anime.alias);if(!eps.length){log("No episodes");return[]}const ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("MAL episode "+m.malEpisode+" not found in AniZone episode list ("+eps.length+" episodes)");return[]}log("Mapped episode -> "+ep.episodeNumber+" "+ep.episodeLink);const stream=await getEpisodeStream(ep.episodeLink);return stream?[stream]:[]}catch(e){log("Fatal: "+e.message);return[]}}
 module.exports={getStreams};
