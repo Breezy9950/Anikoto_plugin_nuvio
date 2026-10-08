@@ -32,7 +32,6 @@
       "author": "Nuvio Team",
       "filename": "providers/anikoto.js",
       "supportedTypes": [
-        "movie",
         "tv"
       ],
       "enabled": true,
