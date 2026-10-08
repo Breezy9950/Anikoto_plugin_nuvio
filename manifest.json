@@ -1,6 +1,6 @@
 {
   "name": "AniKoto-Nuvio",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "AnimeOnsen, AniZone, Anikoto and Reanime providers with database-first unified mapping and original stream extraction",
   "scrapers": [
     {
