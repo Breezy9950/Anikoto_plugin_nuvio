@@ -86,28 +86,6 @@
         "en",
         "ja"
       ]
-    },
-    {
-      "id": "vidsrc",
-      "name": "VidSrc",
-      "description": "VidSrc.me streams with parallel server resolution and JS caching for fast extraction",
-      "version": "1.0.0",
-      "author": "Nuvio Team",
-      "filename": "providers/vidsrc.js",
-      "supportedTypes": [
-      "movie",
-      "tv"
-    ],
-     "enabled": true,
-     "formats": [
-     "m3u8",
-     "mp4",
-     "mkv"
-    ],
-     "logo": "https://www.google.com/s2/favicons?domain=vidsrc.me&sz=128",
-     "contentLanguage": [
-     "en"
-     ]
     }
   ]
 }
