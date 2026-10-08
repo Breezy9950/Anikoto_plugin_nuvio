@@ -38,47 +38,11 @@ var __async = (__this, __arguments, generator) => {
     step((generator = generator.apply(__this, __arguments)).next());
   });
 };
-
-// ============================================================
-// SPEED LAYER — Promise.race hard timeout + in-flight dedupe.
-// AbortController.signal is silently ignored by Nuvio's runtime,
-// so we race the real fetch against a timer instead. The
-// underlying fetch keeps running in the background; we just
-// stop waiting and let the caller retry (LiteSpeed cache warm).
-// ============================================================
-var _nativeFetch = globalThis.fetch;
-var _fetchCache = new Map();
-var REQUEST_TIMEOUT_MS = 12000;
-
-globalThis.fetch = function _cachedTimedFetch(url, opts) {
-  var method = (opts && opts.method) || "GET";
-  var headers = (opts && opts.headers) || {};
-  var key;
-  try { key = method + " " + url + " " + JSON.stringify(headers); }
-  catch (e) { key = method + " " + url; }
-
-  if (_fetchCache.has(key)) return _fetchCache.get(key);
-
-  var timed = Promise.race([
-    _nativeFetch(url, opts),
-    new Promise(function (_, reject) {
-      setTimeout(function () {
-        reject(new Error("timeout " + REQUEST_TIMEOUT_MS + "ms: " + url));
-      }, REQUEST_TIMEOUT_MS);
-    })
-  ]);
-
-  _fetchCache.set(key, timed);
-  timed.catch(function () { _fetchCache.delete(key); });
-  return timed;
-};
-
 var BASE_URL = "https://4khdhub.click";
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 var DOMAINS_URL = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json";
 var domainCache = { url: BASE_URL, ts: 0 };
-
 function fetchLatestDomain() {
   return __async(this, null, function* () {
     const now = Date.now();
@@ -96,11 +60,10 @@ function fetchLatestDomain() {
     return domainCache.url;
   });
 }
-
 function fetchText(_0) {
   return __async(this, arguments, function* (url, options = {}) {
-    const retries = options.retries !== void 0 ? options.retries : 1;
-    const delay = options.delay !== void 0 ? options.delay : 500;
+    const retries = options.retries !== void 0 ? options.retries : 2;
+    const delay = options.delay !== void 0 ? options.delay : 1e3;
     for (let i = 0; i <= retries; i++) {
       try {
         const response = yield fetch(url, {
@@ -119,7 +82,6 @@ function fetchText(_0) {
     return null;
   });
 }
-
 function getTmdbDetails(tmdbId, type) {
   return __async(this, null, function* () {
     const isSeries = type === "series" || type === "tv";
@@ -146,7 +108,6 @@ function getTmdbDetails(tmdbId, type) {
     }
   });
 }
-
 function atob(input) {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
   let str = String(input).replace(/=+$/, "");
@@ -159,13 +120,11 @@ function atob(input) {
   }
   return output;
 }
-
 function rot13Cipher(str) {
   return str.replace(/[a-zA-Z]/g, function(c) {
     return String.fromCharCode((c <= "Z" ? 90 : 122) >= (c = c.charCodeAt(0) + 13) ? c : c - 26);
   });
 }
-
 function levenshteinDistance(s, t) {
   if (s === t)
     return 0;
@@ -191,7 +150,6 @@ function levenshteinDistance(s, t) {
   }
   return d[n][m];
 }
-
 function parseBytes(val) {
   if (typeof val === "number")
     return val;
@@ -213,7 +171,6 @@ function parseBytes(val) {
     multiplier = 1024 * 1024 * 1024 * 1024;
   return num * multiplier;
 }
-
 function formatBytes(val) {
   if (val === 0)
     return "0 B";
@@ -225,14 +182,14 @@ function formatBytes(val) {
   return parseFloat((val / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
+// ---- Minimal inline release-info parser (only used to fill description lines) ----
 function parseReleaseInfo(releaseTitle) {
   const t = String(releaseTitle || "");
-  const info = { source: "", codec: "", hdr: "", dv: false, audio: [], languages: [] };
+  const info = { source: "", codec: "", hdr: "", dv: false, audio: [] };
 
   if (/bluray|blu-ray|bdrip|brrip/i.test(t)) info.source = "BluRay";
   else if (/web-?dl|webrip/i.test(t)) info.source = "WEB-DL";
   else if (/hdtv/i.test(t)) info.source = "HDTV";
-  else if (/hdcam|camrip|\bcam\b/i.test(t)) info.source = "CAM";
 
   if (/x265|h\.?265|hevc/i.test(t)) info.codec = "H.265";
   else if (/x264|h\.?264|avc/i.test(t)) info.codec = "H.264";
@@ -250,15 +207,14 @@ function parseReleaseInfo(releaseTitle) {
 
   if (/\batmos\b/i.test(t)) info.audio.push("Atmos");
 
-  if (/\bhindi\b/i.test(t)) info.languages.push("Hindi");
-  if (/\bdual[\s._-]?audio\b/i.test(t)) info.languages.push("Dual-Audio");
-  if (/\bmulti[\s._-]?audio\b/i.test(t)) info.languages.push("Multi-Audio");
+  if (/\bhindi\b/i.test(t)) info.audio.push("Hindi");
+  if (/\bdual[\s._-]?audio\b/i.test(t)) info.audio.push("Dual-Audio");
+  if (/\bmulti[\s._-]?audio\b/i.test(t)) info.audio.push("Multi-Audio");
 
   return info;
 }
 
 var cheerio = require("cheerio-without-node-native");
-
 function fetchPageUrl(name, year, isSeries) {
   return __async(this, null, function* () {
     const domain = yield fetchLatestDomain();
@@ -274,6 +230,8 @@ function fetchPageUrl(name, year, isSeries) {
     console.log(`[4KHDHub] Parsing search results for type: ${targetType}`);
     const matchingCards = $(".movie-card").filter((_, el) => {
       const hasFormat = $(el).find(`.movie-card-format:contains("${targetType}")`).length > 0;
+      if (!hasFormat) {
+      }
       return hasFormat;
     }).filter((_, el) => {
       const metaText = $(el).find(".movie-card-meta").text();
@@ -304,9 +262,7 @@ function fetchPageUrl(name, year, isSeries) {
     return matchingCards.length > 0 ? matchingCards[0] : null;
   });
 }
-
 var cheerio2 = require("cheerio-without-node-native");
-
 function resolveRedirectUrl(redirectUrl) {
   return __async(this, null, function* () {
     if (redirectUrl.includes("hubcloud.") || redirectUrl.includes("hubdrive.")) {
@@ -333,7 +289,6 @@ function resolveRedirectUrl(redirectUrl) {
     return redirectUrl;
   });
 }
-
 function extractSourceResults($, el) {
   return __async(this, null, function* () {
     const localHtml = $(el).html();
@@ -390,7 +345,6 @@ function extractSourceResults($, el) {
     return null;
   });
 }
-
 function extractHubCloud(hubCloudUrl, baseMeta) {
   return __async(this, null, function* () {
     if (!hubCloudUrl)
@@ -419,19 +373,34 @@ function extractHubCloud(hubCloudUrl, baseMeta) {
       if (!href)
         return;
       if (text.includes("10Gbps") || text.includes("PixelServer") || href.includes("hubcloud.cx")) {
-        results.push({ source: "HubCloud 10Gbps", url: href, meta: currentMeta });
+        results.push({
+          source: "HubCloud 10Gbps",
+          url: href,
+          meta: currentMeta
+        });
       } else if (text.includes("Download File") || href.includes("r2.dev")) {
-        results.push({ source: "Direct R2", url: href, meta: currentMeta });
+        results.push({
+          source: "Direct R2",
+          url: href,
+          meta: currentMeta
+        });
       } else if (text.includes("ZipDisk") || href.includes("workers.dev")) {
-        results.push({ source: "ZipDisk Server", url: href, meta: currentMeta });
+        results.push({
+          source: "ZipDisk Server",
+          url: href,
+          meta: currentMeta
+        });
       } else if (text.includes("FSL")) {
-        results.push({ source: "FSL", url: href, meta: currentMeta });
+        results.push({
+          source: "FSL",
+          url: href,
+          meta: currentMeta
+        });
       }
     });
     return results;
   });
 }
-
 function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
   return __async(this, null, function* () {
     if (!hblinksUrl || depth > 2)
@@ -442,21 +411,12 @@ function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
         return [];
       const $ = cheerio2.load(html);
       const links = [...new Set($("h3 a, h5 a, div.entry-content p a, div.entry-content a").map((_, el) => $(el).attr("href")).get().filter(Boolean))];
-
-      // Resolve every link in parallel
-      const resolvedPairs = yield Promise.all(links.map((rawLink) => __async(this, null, function* () {
+      const results = [];
+      for (const rawLink of links) {
         try {
           const absoluteLink = new URL(rawLink, hblinksUrl).toString();
           const resolvedLink = yield resolveRedirectUrl(absoluteLink);
-          return { raw: rawLink, absolute: absoluteLink, link: resolvedLink || absoluteLink };
-        } catch (e) { return null; }
-      })));
-
-      const results = [];
-      for (const pair of resolvedPairs) {
-        if (!pair) continue;
-        try {
-          const link = pair.link;
+          const link = resolvedLink || absoluteLink;
           const hostname = new URL(link).hostname.toLowerCase();
           if (hostname.includes("hblinks") || hostname.includes("hubstream.dad")) {
             const nestedResults = yield extractHblinks(link, baseMeta, depth + 1);
@@ -482,7 +442,8 @@ function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
           } else if (/\.(m3u8|mpd|mp4|mkv)(?:$|\?)/i.test(link)) {
             results.push({ source: "Hblinks Direct", url: link, meta: baseMeta });
           }
-        } catch (e) {}
+        } catch (e) {
+        }
       }
       return results;
     } catch (e) {
@@ -490,9 +451,7 @@ function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
     }
   });
 }
-
 var cheerio3 = require("cheerio-without-node-native");
-
 function getStreams(tmdbId, type, season, episode) {
   return __async(this, null, function* () {
     const tmdbDetails = yield getTmdbDetails(tmdbId, type);
@@ -518,18 +477,23 @@ function getStreams(tmdbId, type, season, episode) {
       $(".episode-item").each((_, el) => {
         if ($(".episode-title", el).text().includes(seasonStr)) {
           const downloadItems = $(".episode-download-item", el).filter((_2, item) => $(item).text().includes(episodeStr));
-          downloadItems.each((_2, item) => { itemsToProcess.push(item); });
+          downloadItems.each((_2, item) => {
+            itemsToProcess.push(item);
+          });
         }
       });
     } else {
-      $(".download-item").each((_, el) => { itemsToProcess.push(el); });
+      $(".download-item").each((_, el) => {
+        itemsToProcess.push(el);
+      });
     }
     console.log(`[4KHDHub] Processing ${itemsToProcess.length} items`);
 
-    const seTag = isSeries && season && episode
+    // Precompute season/episode suffix once for the description
+    const seSuffix = isSeries && season && episode
       ? ` S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`
       : "";
-    const baseTitleLine = `${title} (${year})${seTag}`;
+    const titleLine = `${title} (${year})${seSuffix}`;
 
     const streamPromises = itemsToProcess.map((item) => __async(this, null, function* () {
       try {
@@ -543,18 +507,11 @@ function getStreams(tmdbId, type, season, episode) {
             extractedLinks = yield extractHubCloud(sourceResult.url, sourceResult.meta);
           }
           return extractedLinks.map((link) => {
-            let height = sourceResult.meta.height || 0;
-            if (!height) {
-              const probe = String(link.meta.title || "") + " " + String(link.source || "");
-              if (/2160|4k/i.test(probe)) height = 2160;
-              else if (/1080/i.test(probe)) height = 1080;
-              else if (/720/i.test(probe)) height = 720;
-              else if (/480/i.test(probe)) height = 480;
-            }
+            const height = sourceResult.meta.height || 0;
             const qualityFull = height === 2160 ? "2160p" : height ? height + "p" : "";
             const qualityShort = height === 2160 ? "4K" : height ? height + "p" : "";
 
-            const name = qualityShort ? "4KHDHub " + qualityShort : "4KHDHub";
+            const name = qualityShort ? `4KHDHub ${qualityShort}` : "4KHDHub";
 
             const info = parseReleaseInfo(link.meta.title);
 
@@ -569,12 +526,11 @@ function getStreams(tmdbId, type, season, episode) {
 
             const sizeLine = formatBytes(link.meta.bytes || 0);
 
-            const audioParts = [];
-            for (const a of info.audio) audioParts.push(a);
-            for (const l of info.languages) audioParts.push(l);
-            const audioLine = audioParts.length ? "Audio: " + audioParts.join(", ") : "";
+            const audioLine = info.audio.length
+              ? "Audio: " + info.audio.join(", ")
+              : "";
 
-            const lines = [baseTitleLine];
+            const lines = [titleLine];
             if (tagLine) lines.push(tagLine);
             if (sizeLine && sizeLine !== "0 B") lines.push(sizeLine);
             if (audioLine) lines.push(audioLine);
@@ -599,7 +555,6 @@ function getStreams(tmdbId, type, season, episode) {
         return [];
       }
     }));
-
     const results = yield Promise.all(streamPromises);
     return results.reduce((acc, val) => acc.concat(val), []);
   });
