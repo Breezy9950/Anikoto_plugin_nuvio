@@ -202,7 +202,7 @@ return changed
 async function sharedLookup(id,s,e,tvdbOverride){
 const st=db(),tvdbId=tvdbOverride?String(tvdbOverride):await getTmdbTvdbId(id,st);
 if(!tvdbId){log(`TMDB->TVDB MISS TMDB=${id}`);return null}
-log(`TMDB->TVDB TMDB=${id} TVDB=${tvdbId} REQUEST_SEASON=${s} CANONICAL_TVDB_SEASON=${s}`);
+log(`TMDB->TVDB TMDB=${id} TVDB=${tvdbId}`);
 let loaded=await loadSharedCandidates(st,tvdbId),selected=chooseMapping(loaded.candidates,s,e);
 if(!selected){
 const migrated=await migrateLegacyLazy(id,s,tvdbId);
@@ -317,18 +317,9 @@ return null
 }
 async function resolveTvdbEpisode(id,s,e,tvdbEpisodes,tmdbEpisodes,cinemetaEpisodeList,cache){
 const key=`${s}:${e}`,cached=cache&&cache.get(key);if(cached)return cached;
-const direct=bestTvdbEpisode(tvdbEpisodes,s,e);
-if(s===0){
-if(!direct){const r={tvdb:null,tmdb:null,match:"special_missing"};if(cache)cache.set(key,r);return r}
-const tmdbEpisode=exactCanonicalEpisode(tmdbEpisodes,cinemetaEpisodeList,s,e)||{
-tmdb_season:0,tmdb_episode:e,tmdb_episode_id:null,air_date:direct.air_date||"",title:direct.title||""
-};
-const r={tvdb:direct,tmdb:tmdbEpisode,match:"tvdb_s0_authoritative"};
-if(cache)cache.set(key,r);
-return r
-}
 const tmdbEpisode=exactCanonicalEpisode(tmdbEpisodes,cinemetaEpisodeList,s,e);
 if(!tmdbEpisode){const r={tvdb:null,tmdb:null,match:"none"};if(cache)cache.set(key,r);return r}
+const direct=bestTvdbEpisode(tvdbEpisodes,s,e);
 if(direct){
 if((direct.air_date&&tmdbEpisode.air_date&&dateMatch(direct.air_date,tmdbEpisode.air_date))||(direct.title&&titleMatch(direct.title,tmdbEpisode.title))){
 const r={tvdb:direct,tmdb:tmdbEpisode,match:"tvdb_s_e_verified"};if(cache)cache.set(key,r);return r
@@ -354,7 +345,6 @@ if(ex&&ex.tvdb_id&&inferred.tvdb_episode_id&&String(ex.tvdb_id)===String(inferre
 }
 const r={tvdb:null,tmdb:tmdbEpisode,match:"canonical_only"};if(cache)cache.set(key,r);return r
 }
-
 function parseMalEpisodes(ani){
 return Object.values(ani&&ani.episodes||{}).map(x=>({episode:Number(x.episode),tvdb_episode_id:x.tvdbEid||x.tvdbId||null,absolute:x.absoluteEpisodeNumber!=null?Number(x.absoluteEpisodeNumber):null,air_date:day(x.airDateUtc||x.airDate||x.airdate),title:(x.title&&(x.title.en||x.title["x-jat"]||x.title.x))||""})).filter(x=>Number.isInteger(x.episode)&&x.episode>0)
 }
@@ -464,46 +454,12 @@ if(!requestedExists){
 cinemetaEpisodeList=await cinemetaEpisodes(el.imdb);
 if(cinemetaEpisodeList.length)log(`CANONICAL FALLBACK CINEMETA TMDB=${id} episodes=${cinemetaEpisodeList.length} REQUEST S${s}E${start}`)
 }
-const specialEpisodes=s===0?tvdbEpisodes.filter(x=>x.tvdb_season===0).sort((a,b)=>a.tvdb_episode-b.tvdb_episode):[];
-const specialEpisodeNumbers=specialEpisodes.map(x=>x.tvdb_episode);
-const seasonCount=s===0?specialEpisodes.length:tvdbEpisodes.filter(x=>x.tvdb_season===s).length;
-const total=s===0?seasonCount:Math.max(seasonCount,Number(oldSeason&&oldSeason.totalEpisodes||0),end);
+const seasonCount=tvdbEpisodes.filter(x=>x.tvdb_season===s).length,total=Math.max(seasonCount,Number(oldSeason&&oldSeason.totalEpisodes||0),end);
 log(`SOURCE=${aniSource} TMDB=${id} TVDB=${tvdbId||"none"} episodes=${tvdbEpisodes.length} seasons=${uniq(tvdbEpisodes.map(x=>x.tvdb_season)).join(",")||"none"} REQUEST S${s}E${start}-${end} TVDB_SAME_NUMBER=${seasonCount}`);
 log(`CANONICAL TMDB=${id} REQUEST S${s}E${start}-${end} TMDB_SEASON_EPISODES=${tmdbEpisodes.length} REQUEST_FOUND=${requestedExists}`);
-let needed=[];
-if(s===0){
-log(`SPECIAL SEASON DETECTED TMDB=${id} S0 available=${specialEpisodeNumbers.join(",")||"none"}`);
-if(!specialEpisodeNumbers.includes(start)){
-const state=Object.assign({},oldSeason||{},{
-tmdb_id:id,tvdb_id:tvdbId,imdb_id:el.imdb,mal_id:el.mal,
-title:(oldSeason&&oldSeason.title)||"Specials",
-totalEpisodes:total,
-specialEpisodeNumbers,
-episodes:oldEpisodes,
-mappedThrough:0,
-complete:false,
-updatedAt:Date.now()
-});
-const st=db();await st.setJSON(`anime:${id}:season:${s}`,state);
-log(`SPECIAL EPISODE MISS TMDB=${id} S0E${start}`);
-return{eligible:true,seasonState:state,mapped:0,failed:1,specialMissing:true}
-}
-if(!oldEpisodes[String(start)]||oldEpisodes[String(start)].mal_episode==null)needed=[start];
-}else{
-for(let n=Math.max(1,start);n<=end;n++)if(!oldEpisodes[String(n)]||oldEpisodes[String(n)].mal_episode==null)needed.push(n);
-}
+const needed=[];for(let n=Math.max(1,start);n<=end;n++)if(!oldEpisodes[String(n)]||oldEpisodes[String(n)].mal_episode==null)needed.push(n);
 log(`WINDOW TMDB=${id} S${s} total=${total} range=${start}-${end} existing=${Object.keys(oldEpisodes).length} missing=${needed.length}`);
-if(!needed.length){
-const existingMapped=s===0?specialEpisodeNumbers.every(n=>oldEpisodes[String(n)]&&oldEpisodes[String(n)].mal_episode!=null):through(total,oldEpisodes)>=total;
-const sState=oldSeason||{tmdb_id:id,tvdb_id:tvdbId,totalEpisodes:total,episodes:oldEpisodes,mappedThrough:s===0?0:through(total,oldEpisodes),complete:existingMapped};
-if(s===0){
-sState.specialEpisodeNumbers=specialEpisodeNumbers;
-sState.mappedThrough=0;
-sState.complete=existingMapped;
-}
-return{eligible:true,seasonState:sState,mapped:0,failed:0}
-}
-
+if(!needed.length){const sState=oldSeason||{tmdb_id:id,tvdb_id:tvdbId,totalEpisodes:total,episodes:oldEpisodes,mappedThrough:through(total,oldEpisodes),complete:through(total,oldEpisodes)>=total};return{eligible:true,seasonState:sState,mapped:0,failed:0}}
 const armIds=(await arm(id,el.imdb,tvdbId)).ids,malCandidates=uniq([el.mal,...aniIds(ani),...armIds]),malCache=await buildMalCache(malCandidates),titleCache=await buildTitleCache(malCandidates,malCache),added={},unresolved=[],resolutionCache=new Map();
 const resolveOne=async ep=>{
 const resolved=await resolveTvdbEpisode(id,s,ep,tvdbEpisodes,tmdbEpisodes,cinemetaEpisodeList,resolutionCache),tvdbEpisode=resolved.tvdb,tmdbEpisode=resolved.tmdb;
@@ -529,15 +485,8 @@ log(`SHARED RESCUE TMDB=${id} S${s}E${ep} -> TVDB S${meta.tvdb_season||"?"}E${me
 }
 }
 }
-const state=Object.assign({},oldSeason||{},{tmdb_id:id,tvdb_id:tvdbId,imdb_id:el.imdb,mal_id:el.mal,title:(oldSeason&&oldSeason.title)||(s===0?"Specials":`Season ${s}`),totalEpisodes:total,episodes:Object.assign({},oldEpisodes,added),updatedAt:Date.now()});
-if(s===0){
-state.specialEpisodeNumbers=specialEpisodeNumbers;
-state.mappedThrough=0;
-state.complete=specialEpisodeNumbers.length>0&&specialEpisodeNumbers.every(n=>state.episodes[String(n)]&&state.episodes[String(n)].mal_episode!=null);
-}else{
-state.mappedThrough=through(total,state.episodes);
-state.complete=state.mappedThrough>=total;
-}
+const state=Object.assign({},oldSeason||{},{tmdb_id:id,tvdb_id:tvdbId,imdb_id:el.imdb,mal_id:el.mal,title:(oldSeason&&oldSeason.title)||`Season ${s}`,totalEpisodes:total,episodes:Object.assign({},oldEpisodes,added),updatedAt:Date.now()});
+state.mappedThrough=through(total,state.episodes);state.complete=state.mappedThrough>=total;
 const st=db();await st.setJSON(`anime:${id}:season:${s}`,state);
 const first=Object.values(added)[0]||{},next=Object.assign({},parent||{},{tmdb_id:id,imdb_id:el.imdb,tvdb_id:tvdbId,mal_id:el.mal,title:series.name||series.original_name||seed.title||"",titles:titles([...(parent&&parent.titles||[]),series.name,series.original_name,...(first.titles||[])]),mal_title:first.mal_title||parent&&parent.mal_title||null,mal_title_english:first.mal_title_english||parent&&parent.mal_title_english||null,mal_title_romanji:first.mal_title_romanji||parent&&parent.mal_title_romanji||null,animeEligible:true,animeEligibilityReason:"SOURCE_CONFIRMED",updatedAt:Date.now()});
 await st.setJSON(`anime:${id}`,next);
@@ -545,7 +494,7 @@ await writeLazyMappings(tvdbId,added);
 log(`WINDOW DONE TMDB=${id} S${s} range=${start}-${end} mapped=${Object.keys(added).length} failed=${finalUnresolved.length} mappedThrough=${state.mappedThrough} src=${aniSource}`);
 return{eligible:true,seasonState:state,mapped:Object.keys(added).length,failed:finalUnresolved.length}
 }
-async function populate(seed){const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),parent=await readSeries(st,id),old=await readSeason(st,id,s),current=old&&old.episodes||{},mappedThrough=Number(old&&old.mappedThrough||0),need=current[String(e)]&&current[String(e)].mal_episode!=null?[]:[e];if(!need.length){log(`REQUESTED EPISODE ALREADY MAPPED TMDB=${id} S${s}E${e}`);return{ok:true,skipped:true,seasonState:old}}const start=Math.max(1,e),end=s===0?start:start+MAX_WINDOW-1;log(`POPULATE REQUEST TMDB=${id} S${s}E${e} mappedThrough=${mappedThrough} range=${start}-${end}`);return populateWindow(id,s,start,end,seed,parent,old)}
+async function populate(seed){const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),parent=await readSeries(st,id),old=await readSeason(st,id,s),current=old&&old.episodes||{},mappedThrough=Number(old&&old.mappedThrough||0),need=current[String(e)]&&current[String(e)].mal_episode!=null?[]:[e];if(!need.length){log(`REQUESTED EPISODE ALREADY MAPPED TMDB=${id} S${s}E${e}`);return{ok:true,skipped:true,seasonState:old}}const start=Math.max(1,e),end=start+MAX_WINDOW-1;log(`POPULATE REQUEST TMDB=${id} S${s}E${e} mappedThrough=${mappedThrough} range=${start}-${end}`);return populateWindow(id,s,start,end,seed,parent,old)}
 async function advanceBoundary(id,s,e,ss,seed,parent){if(ss&&ss.exhausted){log(`EXHAUSTED TMDB=${id} S${s}`);return{ok:true,existing:true,boundary:true,exhausted:true,seasonState:ss}}const total=Number(ss&&ss.totalEpisodes||0);if(total&&e<total){const start=Math.max(1,e+1),end=Math.min(total,start+MAX_WINDOW-1);log(`BOUNDARY ADVANCE TMDB=${id} S${s} E${e} -> S${s}E${start}-${end}`);const r=await populateWindow(id,s,start,end,seed,parent,ss);return Object.assign({},r,{boundary:true,advanced:true})}const st=db(),now=Date.now(),seasonState=Object.assign({},ss||{},{tmdb_id:id,totalEpisodes:total,mappedThrough:Number(ss&&ss.mappedThrough||e),complete:true,exhausted:true,exhaustedAt:now,updatedAt:now});await st.setJSON(`anime:${id}:season:${s}`,seasonState);log(`SEASON EXHAUSTED TMDB=${id} S${s}`);return{ok:true,existing:true,boundary:true,exhausted:true,seasonState}}
 async function populateIfNeeded(seed){
 const id=String(seed.tmdb_id),s=Number(seed.season),e=Number(seed.episode),st=db(),existing=await sharedLookup(id,s,e);
@@ -559,7 +508,7 @@ const r=await populate(seed);
 return Object.assign({},r,{boundary:false})
 }finally{await unlock(st,id)}
 }
-async function boundaryState(id,s,e){const st=db(),ss=await readSeason(st,id,s);if(!ss)return{boundary:false};const specialKnown=s===0&&Array.isArray(ss.specialEpisodeNumbers),specialMissing=specialKnown&&!ss.specialEpisodeNumbers.includes(e);const isBoundary=s===0?false:Number(ss.mappedThrough)===e;return{boundary:isBoundary,seasonComplete:!!ss.complete,totalEpisodes:Number(ss.totalEpisodes||0),mappedThrough:Number(ss.mappedThrough||0),specialMissing}}
+async function boundaryState(id,s,e){const st=db(),ss=await readSeason(st,id,s);if(!ss)return{boundary:false};const isBoundary=Number(ss.mappedThrough)===e;return{boundary:isBoundary,seasonComplete:!!ss.complete,totalEpisodes:Number(ss.totalEpisodes||0),mappedThrough:Number(ss.mappedThrough||0)}}
 function origin(event){
 const h=event&&event.headers||{},host=h.host||h.Host||"";
 if(host)return`${String(h["x-forwarded-proto"]||h["X-Forwarded-Proto"]||"https").split(",")[0]}://${host}`;
@@ -607,13 +556,8 @@ return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:p
 }
 }
 }
-const finalState=await boundaryState(id,s,e);
-if(finalState.specialMissing){
-log(`RESULT special-miss TMDB=${id} S0E${e} time=${Date.now()-started}ms`);
-return json(404,{ok:false,pending:false,mapping:null,error:"Special episode not found",state:finalState})
-}
 log(`RESULT source=pending time=${Date.now()-started}ms`);
-return json(202,{ok:false,pending:true,mapping:null,error:"Anime mapping population in progress",state:finalState})
+return json(202,{ok:false,pending:true,mapping:null,error:"Anime mapping population in progress",state:await boundaryState(id,s,e)})
 }catch(error){
 console.error("[ANIME LAZY MAPPING] FATAL",error);
 return json(500,{ok:false,error:error&&error.message?error.message:"Mapping service error"})
