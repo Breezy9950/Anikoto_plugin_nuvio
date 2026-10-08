@@ -289,7 +289,6 @@ async function episodePage(slug,ep){
 }
 
 async function getTmdbInfo(tmdbId,mediaType,season=1){
-  if(!/^\d+$/.test(String(tmdbId||"")))return null;
   const type=mediaType==="movie"?"movie":"tv";
   const url="https://api.themoviedb.org/3/"+type+"/"+encodeURIComponent(tmdbId)+"?api_key="+TMDB_API_KEY+"&language=en-US";
   const d=await json(url,{headers:{"Accept":"application/json"}},7000);
@@ -528,7 +527,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
             const r=await req(BASE+"/livewire/update",{
               method:"POST",
               headers:{
-                "Accept":"application/json",
+                "Accept":"*/*",
                 "Content-Type":"application/json",
                 "X-Livewire":"",
                 "X-CSRF-TOKEN":csrf,

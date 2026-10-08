@@ -1,13 +1,13 @@
-/* Reanime provider: mapper-first (MAL to AniList via idMal) with reanime native fallback. */
-/* Does NOT populate the mapper - read-only lookups via pending=1. */
+/* Reanime provider: mapper-first (MAL->AniList via idMal) with reanime native fallback.
+   Does NOT populate the mapper — read-only lookups via pending=1. */
 const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping";
 const REANIME_DOMAINS=["https://reanime.to","https://reanime.cz","https://reanime.wtf"];
 const FLIXCLOUD_BASE="https://flixcloud.cc";
 const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 const ANILIST_URL="https://graphql.anilist.co";
 const UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
-const HEADERS={"User-Agent":UA,"Accept":"application/json","Accept-Language":"en-US,en;q=0.9"};
-const FLIX_HEADERS={"User-Agent":UA,"Accept":"application/json","Origin":FLIXCLOUD_BASE,"Referer":FLIXCLOUD_BASE+"/"};
+const HEADERS={"User-Agent":UA,"Accept":"application/json, text/plain, */*","Accept-Language":"en-US,en;q=0.9"};
+const FLIX_HEADERS={"User-Agent":UA,"Accept":"*/*","Origin":FLIXCLOUD_BASE,"Referer":FLIXCLOUD_BASE+"/"};
 
 function log(x){console.log("[Reanime] "+x)}
 
@@ -38,6 +38,7 @@ async function reanimeReq(path,opt,ms){
   return null
 }
 
+// ---------- Primary: mapper (read-only, no population trigger) ----------
 async function mapperLookup(tmdbId,season,episode){
   const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&pending=1";
   const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},5000);
@@ -61,6 +62,7 @@ async function malToAnilist(malId){
   })
 }
 
+// ---------- Reanime API ----------
 async function flixServers(anilistId,episode){
   return memo("reanime:flix:"+anilistId+":"+episode,1800000,async()=>{
     const path="/api/flix/"+encodeURIComponent(anilistId)+"/"+encodeURIComponent(episode);
@@ -87,6 +89,7 @@ async function extractFlix(embedUrl){
   return{url:base+"/download/"+fileId+"?token="+token,quality:q,size,headers:FLIX_HEADERS}
 }
 
+// ---------- Fallback: reanime native search ----------
 async function tmdbInfo(tmdbId,mediaType){
   return memo("reanime:tmdb:"+mediaType+":"+tmdbId,86400000,async()=>{
     const type=mediaType==="movie"?"movie":"tv";
@@ -180,6 +183,7 @@ async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo){
   return{alId:best.x.anilistId,title:best.x.title||info.title,episode:mediaType==="movie"?1:episode,malId:null}
 }
 
+// ---------- Build streams ----------
 async function buildStreams(resolved,mediaType){
   const servers=await flixServers(resolved.alId,resolved.episode).catch(()=>null);
   if(!Array.isArray(servers)||!servers.length)return[];
@@ -233,6 +237,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     const key="reanime:streams:"+id+":"+type+":"+s+":"+e;
     const hit=CACHE.get(key);if(hit!==undefined)return hit;
     const p=(async()=>{
+      // Prefetch TMDB info in parallel with mapper — only used if mapper misses.
       const tmdbPromise=tmdbInfo(id,type).catch(()=>null);
       let resolved=null,source="mapper";
       try{
@@ -242,7 +247,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
           if(al){
             resolved={alId:al.id,title:m.title||al.title,episode:m.malEpisode,malId:m.malId};
             log("Mapper hit MAL="+m.malId+" AL="+al.id+" E"+m.malEpisode);
-          }else log("Mapper hit but MAL-AL failed MAL="+m.malId);
+          }else log("Mapper hit but MAL->AL failed MAL="+m.malId);
         }else log("Mapper miss TMDB="+id+" S"+s+"E"+e);
       }catch(err){log("Mapper error: "+err.message)}
       let streams=[];
