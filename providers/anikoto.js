@@ -848,7 +848,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase();
     if(type!=="tv")return[];
-    const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1;
+    const id=String(tmdbId||"").trim(),seasonNumber=Number(season),s=Number.isInteger(seasonNumber)&&seasonNumber>=0?seasonNumber:1,e=Number(episode)||1;
     if(!id)return[];
     const key="anikoto:streams:"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
     const hit=CACHE.get(key);
