@@ -183,7 +183,23 @@ function formatBytes(val) {
 }
 
 // ============================================================
-// SETTINGS — surfaced in Nuvio's plugin settings screen
+// SORT TAG — invisible prefix that forces Nuvio's alphabetical
+// sort to put higher-quality / bigger streams on top.
+// U+200B (8203) < U+FEFF (65279), so streams with more leading
+// zeros in the encoded key sort earlier.
+// ============================================================
+function getInvertedSortTag(value, max) {
+  max = max || 999999;
+  const clamped = Math.max(0, parseInt(value, 10) || 0);
+  const inverted = Math.max(0, max - clamped);
+  const binary = inverted.toString(2).padStart(20, "0");
+  return binary.split("").map(function (b) {
+    return b === "1" ? "\ufeff" : "\u200b";
+  }).join("");
+}
+
+// ============================================================
+// SETTINGS
 // ============================================================
 function onSettings() {
   return [
@@ -240,7 +256,9 @@ function resolveSettings(input) {
   return s;
 }
 
-// ---- Minimal inline release-info parser ----
+// ============================================================
+// RELEASE INFO PARSER
+// ============================================================
 function parseReleaseInfo(releaseTitle) {
   const t = String(releaseTitle || "");
   const info = { source: "", codec: "", hdr: "", dv: false, audio: [] };
@@ -291,8 +309,6 @@ function fetchPageUrl(name, year, isSeries) {
     console.log(`[4KHDHub] Parsing search results for type: ${targetType}`);
     const matchingCards = $(".movie-card").filter((_, el) => {
       const hasFormat = $(el).find(`.movie-card-format:contains("${targetType}")`).length > 0;
-      if (!hasFormat) {
-      }
       return hasFormat;
     }).filter((_, el) => {
       const metaText = $(el).find(".movie-card-meta").text();
@@ -446,7 +462,8 @@ function extractHubCloud(hubCloudUrl, baseMeta) {
     return results;
   });
 }
-function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
+function extractHblinks(hblinksUrl, baseMeta, depth) {
+  depth = depth || 0;
   return __async(this, null, function* () {
     if (!hblinksUrl || depth > 2)
       return [];
@@ -541,7 +558,6 @@ function getStreams(tmdbId, type, season, episode, settings) {
       try {
         const sourceResult = yield extractSourceResults($, item);
         if (sourceResult && sourceResult.url) {
-          console.log(`[4KHDHub] Extracting from ${sourceResult.extractor === "hblinks" ? "Hblinks" : "HubCloud"}: ${sourceResult.url}`);
           let extractedLinks;
           if (sourceResult.extractor === "hblinks") {
             extractedLinks = yield extractHblinks(sourceResult.url, sourceResult.meta);
@@ -552,12 +568,9 @@ function getStreams(tmdbId, type, season, episode, settings) {
             const height = sourceResult.meta.height || 0;
             const qualityShort = height === 2160 ? "4K" : height ? height + "p" : "";
 
-            // Stream name — quality stays here, that's the only place it shows
-            const name = qualityShort ? `4KHDHub ${qualityShort}` : "4KHDHub";
-
             const info = parseReleaseInfo(link.meta.title);
 
-            // Tag line: provider (source) first, then source type, codec, hdr
+            // Tag line: provider first (FSL, Direct R2, etc.), then source type, codec, HDR
             const tagParts = [];
             if (link.source) tagParts.push(link.source);
             if (info.source) tagParts.push(info.source);
@@ -578,16 +591,22 @@ function getStreams(tmdbId, type, season, episode, settings) {
             if (audioLine) lines.push(audioLine);
             const description = lines.join("\n");
 
+            // Sort key: quality tier dominates, then size (MB).
+            // Encoded as invisible zero-width prefix so Nuvio's name-sort
+            // puts 4K > 1080p > 720p, and inside a tier bigger sizes first.
+            const qr = height === 2160 ? 4 : height === 1080 ? 3 : height === 720 ? 2 : height === 480 ? 1 : 0;
+            const sizeMB = Math.floor((link.meta.bytes || 0) / (1024 * 1024));
+            const sortKey = qr * 100000 + Math.min(sizeMB, 99999);
+            const sortTag = getInvertedSortTag(sortKey, 999999);
+            const name = `${sortTag}4KHDHub ${qualityShort}`.trim();
+
             return {
               name,
               title: description,
               size: description,
               description,
               url: link.url,
-              // NOTE: no `quality` field → Nuvio won't prefix it before the title
-              // Sort helpers (stripped before returning)
-              __qr: height,
-              __sb: link.meta.bytes || 0,
+              // NO `quality` field — that's what was producing the "1080p • " prefix
               behaviorHints: {
                 bingeGroup: `4khdhub-${link.source}`
               }
@@ -609,32 +628,19 @@ function getStreams(tmdbId, type, season, episode, settings) {
       : flat;
     console.log(`[4KHDHub] Filter (${resolved.sourceLabel || "all"}): ${visible.length}/${flat.length}`);
 
-    // Dedupe (name includes quality, description has the rest)
+    // Dedupe
     const seen = new Set();
     const deduped = [];
     for (const r of visible) {
-      const key = [
-        r.name || "",
-        (r.description || "").replace(/\n/g, "|")
-      ].join("::");
+      const key = (r.description || "").replace(/\n/g, "|");
       if (seen.has(key)) continue;
       seen.add(key);
       deduped.push(r);
     }
     console.log(`[4KHDHub] After dedupe: ${deduped.length}/${visible.length} kept`);
 
-    // Sort: quality rank desc, then size desc
-    // (e.g. 8 GB 4K stays above 40 GB 1080p — quality wins)
-    deduped.sort((a, b) => {
-      if (b.__qr !== a.__qr) return b.__qr - a.__qr;
-      return b.__sb - a.__sb;
-    });
-
-    // Strip sort helpers before returning
-    for (const r of deduped) {
-      delete r.__qr;
-      delete r.__sb;
-    }
+    // Sort as a safety net (Nuvio may or may not re-sort)
+    deduped.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     return deduped;
   });
 }
