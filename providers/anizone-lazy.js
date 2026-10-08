@@ -289,7 +289,6 @@ async function episodePage(slug,ep){
 }
 
 async function getTmdbInfo(tmdbId,mediaType,season=1){
-  if(!/^\d+$/.test(String(tmdbId||"")))return null;
   const type=mediaType==="movie"?"movie":"tv";
   const url="https://api.themoviedb.org/3/"+type+"/"+encodeURIComponent(tmdbId)+"?api_key="+TMDB_API_KEY+"&language=en-US";
   const d=await json(url,{headers:{"Accept":"application/json"}},7000);
@@ -384,7 +383,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
   console.log("[AniZone Lazy] REQUEST",{tmdbId,mediaType,season,episode});
 
   const movie=mediaType==="movie";
-  let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="",airDate="",airTime="",tvdbId="";
+  let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="";
 
   if(!movie){
     mappingResult=await dbMapping(tmdbId,season,episode);
@@ -406,9 +405,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     imdbId=mapImdb(m);
     malId=mapMalId(m);
     seasonName=String(m.season_name||m.seasonName||"");
-    airDate=String(m.air_date||"");
-    airTime=String(m.air_time||"");
-    tvdbId=String(m.tvdb_id||"");
+
 
   }else{
     const info=await getTmdbInfo(tmdbId,"movie");
@@ -420,13 +417,11 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
   }
 
-  if((!mappingResult||!mappingResult.mapping)&&!movie){
-    const tmdbInfo=await getTmdbInfo(tmdbId,"tv",season);
-    if(tmdbInfo){
-      if(tmdbInfo.title&&!title)title=tmdbInfo.title;
-      if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
-      seasonName=seasonName||tmdbInfo.seasonName||""
-    }
+  const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season):null;
+  if(tmdbInfo){
+    if(tmdbInfo.title&&!title)title=tmdbInfo.title;
+    if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
+    seasonName=seasonName||tmdbInfo.seasonName||""
   }
 
   const specific=targetTitles.length?targetTitles:[title,...altTitles].filter(Boolean);
@@ -455,7 +450,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     return[]
   }
 
-  console.log("[AniZone Lazy] CARD MATCH",{title,slug,episode:malEpisode,airDate,airTime,imdbId,tvdbId,malId});
+  console.log("[AniZone Lazy] CARD MATCH",{title,slug,episode:malEpisode});
 
   const page=await episodePage(slug,malEpisode);
   if(!page){
