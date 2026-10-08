@@ -168,7 +168,7 @@ function normalize(s){
 }
 
 function seasonRules(season){
-  const seasonNumber=Number(season),s=Number.isInteger(seasonNumber)&&seasonNumber>=0?seasonNumber:1;
+  const s=Number(season)||1;
   if(s===1)return{mustNot:[
     /season\s*[2-9]/i,
     /saison\s*[2-9]/i,
@@ -194,7 +194,7 @@ function seasonRules(season){
 }
 
 function matchCard(cards,targetTitles,baseTitle,season=1,seasonName=""){
-  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))],base=normalize(baseTitle),sn=normalize(seasonName),seasonNumber=Number(season),s=Number.isInteger(seasonNumber)&&seasonNumber>=0?seasonNumber:1;
+  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))],base=normalize(baseTitle),sn=normalize(seasonName),s=Number(season)||1;
   if(sn&&sn!=="season"+s){
     for(const c of cards)for(const t of cardTitles(c))if(normalize(t).includes(sn))return c.slug
   }
@@ -302,7 +302,7 @@ async function getTmdbInfo(tmdbId,mediaType,season=1){
 
 async function dbMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
-  season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
+  season=Number(season)||1;
   episode=Number(episode)||1;
   if(!tmdbId){
     console.log("[AniZone Lazy] REFUSING EMPTY TMDB ID");
@@ -373,7 +373,7 @@ function cleanQuery(s){
 async function resolveStream(tmdbId,mediaType,season,episode){
   tmdbId=String(tmdbId||"").trim();
   mediaType=String(mediaType||"tv").toLowerCase();
-  season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
+  season=Number(season)||1;
   episode=Number(episode)||1;
   if(!tmdbId){
     console.log("[AniZone Lazy] ABORT EMPTY TMDB ID");
@@ -595,7 +595,7 @@ async function getStreams(tmdbId,mediaType,season,episode,settings){
     return await resolveStream(
       String(tmdbId||""),
       String(mediaType||"tv"),
-      (Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1),
+      Number(season)||1,
       Number(episode)||1
     )
   }catch(e){

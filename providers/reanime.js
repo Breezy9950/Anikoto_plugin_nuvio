@@ -232,7 +232,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase(),id=String(tmdbId||"").trim();
     if(!id)return[];
-    const seasonNumber=Number(season),s=Number.isInteger(seasonNumber)&&seasonNumber>=0?seasonNumber:1,e=Number(episode)||1;
+    const s=Number(season)||1,e=Number(episode)||1;
     const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
     const key="reanime:streams:"+id+":"+type+":"+s+":"+e;
     const hit=CACHE.get(key);if(hit!==undefined)return hit;
@@ -255,7 +255,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         try{streams=await timeout(buildStreams(resolved,type),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
-      if(!streams.length&&s!==0){
+      if(!streams.length){
         log("Falling back to native");
         source="native";
         try{
