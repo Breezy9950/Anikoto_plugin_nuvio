@@ -1,7 +1,7 @@
 const{populateIfNeeded}=require("./anime-lazy-mapping.js");
 function log(x){console.log(`[ANIME LAZY BG] ${x}`)}
 function body(event){try{return JSON.parse(event&&event.body||"{}")}catch(e){return null}}
-const POPULATE_DEADLINE_MS=90000;
+const POPULATE_DEADLINE_MS=150000;
 exports.handler=async event=>{
 const seed=body(event);
 if(!seed){log("INVALID JSON BODY");return{statusCode:400,body:JSON.stringify({ok:false,error:"Invalid JSON body"})}}
