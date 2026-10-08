@@ -182,7 +182,69 @@ function formatBytes(val) {
   return parseFloat((val / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
-// ---- Minimal inline release-info parser (only used to fill description lines) ----
+// ============================================================
+// SETTINGS — surfaced in Nuvio's plugin settings screen
+// ============================================================
+function onSettings() {
+  return [
+    {
+      type: "select",
+      key: "source",
+      name: "source",
+      label: "Preferred Source",
+      options: [
+        { label: "FSL", value: "fsl" },
+        { label: "HubCloud 10Gbps", value: "hubcloud" },
+        { label: "Direct R2", value: "r2" },
+        { label: "ZipDisk", value: "zipdisk" },
+        { label: "All Sources", value: "all" }
+      ],
+      default: "fsl"
+    }
+  ];
+}
+
+function resolveSettings(input) {
+  const LABEL_MAP = {
+    fsl: "FSL",
+    hubcloud: "HubCloud 10Gbps",
+    "hubcloud 10gbps": "HubCloud 10Gbps",
+    r2: "Direct R2",
+    "direct r2": "Direct R2",
+    zipdisk: "ZipDisk Server",
+    "zipdisk server": "ZipDisk Server",
+    hblinks: "Hblinks Direct",
+    "hblinks direct": "Hblinks Direct",
+    all: null,
+    any: null
+  };
+
+  let s = { sourceLabel: "FSL" }; // default
+
+  try {
+    let settings = input;
+    if (!settings && typeof globalThis !== "undefined")
+      settings = globalThis.SCRAPER_SETTINGS || globalThis.SETTINGS || globalThis.settings;
+    if (!settings && typeof global !== "undefined")
+      settings = global.SCRAPER_SETTINGS || global.SETTINGS || global.settings;
+    if (!settings && typeof window !== "undefined")
+      settings = window.SCRAPER_SETTINGS || window.SETTINGS || window.settings;
+
+    if (settings) {
+      let raw = settings.source || settings.src || settings.preferred_source || "";
+      if (typeof raw === "object" && raw !== null)
+        raw = raw.value || raw.key || "";
+      const norm = String(raw).toLowerCase().trim();
+      if (norm && LABEL_MAP.hasOwnProperty(norm))
+        s.sourceLabel = LABEL_MAP[norm];
+    }
+  } catch (e) {
+    console.log(`[4KHDHub] settings parse error: ${e.message}`);
+  }
+  return s;
+}
+
+// ---- Minimal inline release-info parser ----
 function parseReleaseInfo(releaseTitle) {
   const t = String(releaseTitle || "");
   const info = { source: "", codec: "", hdr: "", dv: false, audio: [] };
@@ -200,16 +262,19 @@ function parseReleaseInfo(releaseTitle) {
 
   if (/dolby.?vision|dovi|(?:^|[._\-\[ ])dv(?:[._\-\] ]|$)/i.test(t)) info.dv = true;
 
-  if (/truehd[\s._-]*7\.1/i.test(t)) info.audio.push("TrueHD 7.1");
-  else if (/ddp[\s._-]*5\.1|eac3/i.test(t)) info.audio.push("DDP5.1");
-  else if (/dd[\s._-]*5\.1|(?:^|[._\- ])ac3(?:[._\- ]|$)/i.test(t)) info.audio.push("DD5.1");
-  else if (/\baac\b/i.test(t)) info.audio.push("AAC");
+  let typeTag = "";
+  if (/\bhindi\b/i.test(t) || /\bmulti[\s._-]?audio\b/i.test(t)) typeTag = "Multi";
+  else if (/\bdual[\s._-]?audio\b/i.test(t)) typeTag = "Dual-Audio";
 
-  if (/\batmos\b/i.test(t)) info.audio.push("Atmos");
+  const codecBits = [];
+  if (/truehd[\s._-]*7\.1/i.test(t)) codecBits.push("TrueHD 7.1");
+  else if (/ddp[\s._-]*5\.1|eac3/i.test(t)) codecBits.push("DDP5.1");
+  else if (/dd[\s._-]*5\.1|(?:^|[._\- ])ac3(?:[._\- ]|$)/i.test(t)) codecBits.push("DD5.1");
+  else if (/\baac\b/i.test(t)) codecBits.push("AAC");
+  if (/\batmos\b/i.test(t)) codecBits.push("Atmos");
 
-  if (/\bhindi\b/i.test(t)) info.audio.push("Hindi");
-  if (/\bdual[\s._-]?audio\b/i.test(t)) info.audio.push("Dual-Audio");
-  if (/\bmulti[\s._-]?audio\b/i.test(t)) info.audio.push("Multi-Audio");
+  if (typeTag) info.audio.push(typeTag);
+  for (const c of codecBits) info.audio.push(c);
 
   return info;
 }
@@ -452,8 +517,10 @@ function extractHblinks(hblinksUrl, baseMeta, depth = 0) {
   });
 }
 var cheerio3 = require("cheerio-without-node-native");
-function getStreams(tmdbId, type, season, episode) {
+function getStreams(tmdbId, type, season, episode, settings) {
   return __async(this, null, function* () {
+    const resolved = resolveSettings(settings);
+    console.log(`[4KHDHub] Preferred source: ${resolved.sourceLabel || "all"}`);
     const tmdbDetails = yield getTmdbDetails(tmdbId, type);
     if (!tmdbDetails)
       return [];
@@ -489,7 +556,6 @@ function getStreams(tmdbId, type, season, episode) {
     }
     console.log(`[4KHDHub] Processing ${itemsToProcess.length} items`);
 
-    // Precompute season/episode suffix once for the description
     const seSuffix = isSeries && season && episode
       ? ` S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`
       : "";
@@ -558,12 +624,16 @@ function getStreams(tmdbId, type, season, episode) {
     const results = yield Promise.all(streamPromises);
     const flat = results.reduce((acc, val) => acc.concat(val), []);
 
-    // Dedupe: same quality + same size + same source/codec/audio = same stream.
-    // Keeps the first one seen; URL is intentionally ignored because the whole
-    // point is that different links point to the same file.
+    // ---- Visibility filter (driven by Nuvio setting) ----
+    const visible = resolved.sourceLabel
+      ? flat.filter(r => r.behaviorHints && r.behaviorHints.bingeGroup === `4khdhub-${resolved.sourceLabel}`)
+      : flat;
+    console.log(`[4KHDHub] Filter (${resolved.sourceLabel || "all"}): ${visible.length}/${flat.length}`);
+
+    // ---- Dedupe ----
     const seen = new Set();
     const deduped = [];
-    for (const r of flat) {
+    for (const r of visible) {
       const key = [
         r.quality || "",
         (r.description || "").replace(/\n/g, "|")
@@ -572,8 +642,8 @@ function getStreams(tmdbId, type, season, episode) {
       seen.add(key);
       deduped.push(r);
     }
-    console.log(`[4KHDHub] After dedupe: ${deduped.length}/${flat.length} streams kept`);
+    console.log(`[4KHDHub] After dedupe: ${deduped.length}/${visible.length} kept`);
     return deduped;
   });
 }
-module.exports = { getStreams };
+module.exports = { getStreams, onSettings };
