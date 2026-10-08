@@ -24,6 +24,19 @@ async function json(url,opt,ms){try{const r=await req(url,opt,ms);if(!r||!r.ok){
 
 async function text(url,opt,ms){try{const r=await req(url,opt,ms);if(!r||!r.ok){log("HTTP "+(r&&r.status)+" "+url.split("?")[0]);return null}return await r.text()}catch(e){log("TEXT fail "+url.split("?")[0]+": "+e.message);return null}}
 
+async function resolveTmdbId(id,type){
+  id=String(id||"").trim();
+  if(/^\d+$/.test(id))return id;
+  if(!/^tt\d+$/i.test(id))return id;
+  return memo("reanime:tmdb:find:"+String(type||"tv").toLowerCase()+":"+id,604800000,async()=>{
+    const t=String(type||"tv").toLowerCase()==="movie"?"movie_results":"tv_results";
+    const u="https://api.themoviedb.org/3/find/"+encodeURIComponent(id)+"?api_key="+TMDB_API_KEY+"&external_source=imdb_id";
+    const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},3500);
+    const a=d&&Array.isArray(d[t])?d[t]:[];
+    return a[0]&&a[0].id?String(a[0].id):id;
+  })
+}
+
 let activeBase=REANIME_DOMAINS[0];
 async function reanimeReq(path,opt,ms){
   const ordered=activeBase?[activeBase,...REANIME_DOMAINS.filter(x=>x!==activeBase)]:REANIME_DOMAINS.slice();
@@ -38,7 +51,7 @@ async function reanimeReq(path,opt,ms){
   return null
 }
 
-// ---------- Primary: mapper (read-only, no population trigger) ----------
+// ---------- Primary: mapper (10read-only, no population trigger) ----------
 async function mapperLookup(tmdbId,season,episode){
   const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&pending=1";
   const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},5000);
@@ -50,12 +63,12 @@ async function mapperLookup(tmdbId,season,episode){
 
 async function malToAnilist(malId){
   return memo("reanime:mal2al:"+malId,604800000,async()=>{
-    const q="query($idMal:Int){Media(idMal:$idMal,type:ANIME){id title{english romaji native}}}";
-    const d=await json(ANILIST_URL,{
+    const q="query($idMal:Int){Media(idMal:$idMal,type:ANIME){id title{english romaji) native}}}";
+   }} const)
+    d=await json },(ANILIST_URL,{
       method:"POST",
       headers:Object.assign({},HEADERS,{"Content-Type":"application/json"}),
-      body:JSON.stringify({query:q,variables:{idMal:parseInt(malId,10)}})
-    },3500);
+      body:JSON.stringify({query:q,variables:{idMal:parseInt(malId,3500);
     if(!d||!d.data||!d.data.Media||!d.data.Media.id)return null;
     const t=d.data.Media.title||{};
     return{id:d.data.Media.id,title:t.english||t.romaji||t.native||""}
@@ -230,14 +243,14 @@ async function buildStreams(resolved,mediaType){
 
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
-    const type=String(mediaType||"tv").toLowerCase(),id=String(tmdbId||"").trim();
+    const type=String(mediaType||"tv").toLowerCase();
+    const id=await resolveTmdbId(String(tmdbId||"").trim(),type);
     if(!id)return[];
     const s=Number(season)||1,e=Number(episode)||1;
     const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
     const key="reanime:streams:"+id+":"+type+":"+s+":"+e;
     const hit=CACHE.get(key);if(hit!==undefined)return hit;
     const p=(async()=>{
-      // Prefetch TMDB info in parallel with mapper — only used if mapper misses.
       const tmdbPromise=tmdbInfo(id,type).catch(()=>null);
       let resolved=null,source="mapper";
       try{
