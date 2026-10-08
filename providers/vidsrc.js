@@ -386,6 +386,8 @@ async function processServer(server, idx, isMovie, season, episode, clean, durat
 
 // ============ Main entry (FIXED: path params + BASEDOM from redirect) ============
 
+// ============ Main entry (DIAGNOSTIC MODE) ============
+
 async function getStreams(tmdbId, type, season, episode) {
   try {
     const isMovie = type === 'movie';
@@ -393,53 +395,90 @@ async function getStreams(tmdbId, type, season, episode) {
       ? `https://vidsrc.me/embed/${tmdbId}`
       : `https://vidsrc.me/embed/tv/${tmdbId}/${season || 1}-${episode || 1}`;
 
-    console.log('[VidSrc] Fetching: ' + embedUrl);
+    const embedRes = await safeFetch(embedUrl, {}, T_EMBED);
 
-    const [embedRes, duration] = await Promise.all([
-      safeFetch(embedUrl, {}, T_EMBED),
-      fetchTMDBDuration(tmdbId, type, season, episode)
-    ]);
-
-    // ★ Derive BASEDOM from the FINAL URL after redirects.
+    // Update BASEDOM from redirect
     try {
       const finalOrigin = new URL(embedRes.url).origin;
-      if (finalOrigin !== BASEDOM) {
-        console.log('[VidSrc] BASEDOM from redirect: ' + finalOrigin);
-        BASEDOM = finalOrigin;
-      }
+      if (finalOrigin !== BASEDOM) BASEDOM = finalOrigin;
     } catch (_) {}
 
     const html = await embedRes.text();
-    const { servers, title } = serversLoad(html);
-    const clean = cleanTitleString(title);
 
-    console.log('[VidSrc] BASEDOM=' + BASEDOM +
-                ' htmlLen=' + html.length +
-                ' servers=' + servers.length +
-                ' title="' + title + '"');
+    // ---- DIAGNOSTIC: return structural findings as fake streams ----
+    const diagnostics = [];
 
-    if (!servers.length) {
-      const iHash = html.indexOf('data-hash');
-      const iId   = html.indexOf('data-id');
-      const iSrv  = html.search(/class="[^"]*server/i);
-      console.log('[VidSrc] diag: data-hash@' + iHash +
-                  ' data-id@' + iId + ' server@' + iSrv);
-      return [];
-    }
+    // 1. Any element with "server" in class or id
+    const serverRefs = html.match(/[^>]*(?:class|id)="[^"]*server[^"]*"[^>]*/gi) || [];
+    diagnostics.push({
+      name: `DIAG: server-refs found=${serverRefs.length}`,
+      url: 'https://diag/' + serverRefs.length
+    });
+    serverRefs.slice(0, 10).forEach((ref, i) => {
+      diagnostics.push({ name: `server-ref-${i}: ${ref.slice(0, 300)}`, url: 'https://diag/ref' + i });
+    });
 
-    const results = await Promise.all(
-      servers.map((srv, i) =>
-        processServer(srv, i, isMovie, season, episode, clean, duration)
-      )
-    );
+    // 2. Any data-hash / data-id attributes
+    const hashRefs = html.match(/data-(?:hash|id)="[^"]*"/gi) || [];
+    diagnostics.push({ name: `DIAG: hash-refs found=${hashRefs.length}`, url: 'https://diag/hashes' });
+    hashRefs.slice(0, 10).forEach((h, i) => {
+      diagnostics.push({ name: `hash-${i}: ${h}`, url: 'https://diag/h' + i });
+    });
 
-    const flat = results.flat();
-    console.log('[VidSrc] Total streams: ' + flat.length);
-    return flat;
+    // 3. Any iframe tags
+    const iframes = html.match(/<iframe[^>]*>/gi) || [];
+    diagnostics.push({ name: `DIAG: iframes found=${iframes.length}`, url: 'https://diag/iframes' });
+    iframes.slice(0, 5).forEach((f, i) => {
+      diagnostics.push({ name: `iframe-${i}: ${f.slice(0, 300)}`, url: 'https://diag/if' + i });
+    });
+
+    // 4. Any <script src="..."> tags
+    const scripts = html.match(/<script[^>]*src="[^"]*"[^>]*>/gi) || [];
+    diagnostics.push({ name: `DIAG: external-scripts found=${scripts.length}`, url: 'https://diag/scripts' });
+    scripts.slice(0, 10).forEach((s, i) => {
+      diagnostics.push({ name: `script-${i}: ${s.slice(0, 200)}`, url: 'https://diag/s' + i });
+    });
+
+    // 5. First 3000 chars of the raw HTML (so you can eyeball it)
+    diagnostics.push({ name: 'HTML-HEAD: ' + html.slice(0, 3000), url: 'https://diag/head' });
+
+    // 6. Look for common vidsrc JS variables
+    const jsVars = html.match(/(?:var|let|const)\s+\w+\s*=\s*(?:\[|\{)[^;]{0,500}/g) || [];
+    diagnostics.push({ name: `DIAG: js-vars found=${jsVars.length}`, url: 'https://diag/jsvars' });
+    jsVars.slice(0, 5).forEach((v, i) => {
+      diagnostics.push({ name: `jsvar-${i}: ${v.slice(0, 300)}`, url: 'https://diag/jv' + i });
+    });
+
+    // Return as fake streams so Nuvio displays them
+    const results = diagnostics.map(d => ({
+      name: d.name,
+      title: d.name,
+      size: d.name,
+      description: d.name,
+      url: d.url,
+      quality: '',
+      language: '',
+      headers: {},
+      subtitles: [],
+      provider: 'VidSrc-DIAG'
+    }));
+
+    console.log('[VidSrc-DIAG] Total diagnostics: ' + results.length);
+    return results;
+
   } catch (e) {
-    console.log('[VidSrc] Scraper error: ' + e.message);
-    return [];
+    return [{
+      name: 'DIAG-ERROR: ' + e.message,
+      title: 'DIAG-ERROR: ' + e.message,
+      size: 'DIAG-ERROR',
+      description: 'DIAG-ERROR',
+      url: 'https://diag/error',
+      quality: '',
+      language: '',
+      headers: {},
+      subtitles: [],
+      provider: 'VidSrc-DIAG'
+    }];
   }
 }
-
 module.exports = { getStreams };
