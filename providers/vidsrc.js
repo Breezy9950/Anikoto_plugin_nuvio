@@ -4,7 +4,7 @@
 const DEFAULT_BASEDOM = 'https://whisperingauroras.com';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 // ⚠️ Replace with your TMDB key (original had a hardcoded value).
-const TMDB_API_KEY = 'YOUR_TMDB_API_KEY';
+const TMDB_API_KEY = '68e094699525b18a70bab2f86b1fa706';
 
 let BASEDOM = DEFAULT_BASEDOM;
 
