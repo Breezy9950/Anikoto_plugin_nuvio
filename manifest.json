@@ -25,7 +25,7 @@
       ]
     },
     {
-      "id": "anizone",
+      "id": "anizone-lazy",
       "name": "AniZone",
       "description": "AniZone streams with database-first unified mapping, lazy population and original scraping",
       "version": "1.1.0",
