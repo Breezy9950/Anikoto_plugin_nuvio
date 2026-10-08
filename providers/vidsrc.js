@@ -3,7 +3,6 @@
 // ============ Configuration ============
 const DEFAULT_BASEDOM = 'https://whisperingauroras.com';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
-// ⚠️ Replace with your TMDB key (original had a hardcoded value).
 const TMDB_API_KEY = '68e094699525b18a70bab2f86b1fa706';
 
 let BASEDOM = DEFAULT_BASEDOM;
@@ -34,7 +33,7 @@ function safeFetch(url, opts, timeout) {
   );
 }
 
-// ============ Decryptors (deobfuscated) ============
+// ============ Decryptors ============
 
 function Iry9MQXnLs(s) {
   if (typeof s !== 'string') return '';
@@ -86,8 +85,6 @@ function MyL1IRSfHe(s) {
 }
 
 function detdj7JHiK(s) {
-  // ⚠️ Original obfuscator key was unresolvable statically; using best-guess.
-  // If this specific variant is rarely used by VidSrc today, this is safe.
   const sliced = s.slice(10, -16);
   const key = 'DgL0Bgu';
   const decoded = b64decode(sliced);
@@ -158,26 +155,44 @@ function decrypt(payload, method) {
   }
 }
 
-// ============ HTML parsing ============
+// ============ HTML parsing (FIXED: multi-pattern + safe iframe override) ============
 
 function serversLoad(html) {
   const out = [];
   const titleMatch = html.match(/<title>([^<]*)<\/title>/i);
   const title = titleMatch ? titleMatch[1] : '';
 
+  // Try several orderings — vidsrc has rotated attribute order before
+  const patterns = [
+    /class="[^"]*server[^"]*"[^>]*data-hash="([^"]*)"[^>]*>([^<]*)/g,
+    /data-hash="([^"]*)"[^>]*class="[^"]*server[^"]*"[^>]*>([^<]*)/g,
+    /class="[^"]*server[^"]*"[^>]*data-id="([^"]*)"[^>]*>([^<]*)/g,
+    /data-id="([^"]*)"[^>]*class="[^"]*server[^"]*"[^>]*>([^<]*)/g
+  ];
+
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      const dataHash = m[1];
+      const name = m[2].trim();
+      if (!out.some(s => s.dataHash === dataHash)) out.push({ name, dataHash });
+    }
+    if (out.length) break;
+  }
+
+  // Only override BASEDOM from iframe if it points somewhere DIFFERENT
   const iframeMatch = html.match(/<iframe\s+[^>]*src="([^"]*)"/i);
-  const iframeSrc = iframeMatch ? iframeMatch[1] : '';
-  if (iframeSrc) {
+  if (iframeMatch) {
     try {
-      BASEDOM = new URL(iframeSrc.startsWith('//') ? 'https:' + iframeSrc : iframeSrc).origin;
+      const src = iframeMatch[1];
+      const iframeOrigin = new URL(src.startsWith('//') ? 'https:' + src : src).origin;
+      if (iframeOrigin !== BASEDOM) {
+        console.log('[VidSrc] BASEDOM override via iframe: ' + iframeOrigin);
+        BASEDOM = iframeOrigin;
+      }
     } catch (_) {}
   }
 
-  const re = /class="[^"]*server[^"]*"[^>]*data-hash="([^"]*)"[^>]*>([^<]*)/g;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    out.push({ name: m[2].trim(), dataHash: m[1] });
-  }
   return { servers: out, title };
 }
 
@@ -209,7 +224,6 @@ async function PRORCPhandler(hash) {
 
     const filename = fileMatch[1];
 
-    // Cache script bodies across servers
     let jsText = scriptCache.get(filename);
     if (!jsText) {
       const jsRes = await safeFetch(BASEDOM + '/' + filename, {}, T_PRORCP);
@@ -327,7 +341,7 @@ function buildStreamObject(url, serverLabel, isMovie, season, episode, clean, du
   };
 }
 
-// ============ Per-server processing (runs in parallel) ============
+// ============ Per-server processing ============
 
 async function processServer(server, idx, isMovie, season, episode, clean, duration) {
   try {
@@ -339,7 +353,6 @@ async function processServer(server, idx, isMovie, season, episode, clean, durat
     let resolved = await PRORCPhandler(rcpSrc.replace('/prorcp/', ''));
     if (!resolved) return [];
 
-    // Token injection (only if placeholders remain)
     if (resolved.includes('__TOKEN__') || resolved.includes('__TOKENPG__')) {
       try {
         const firstUrl = resolved.split(/[\s\n]/)[0];
@@ -356,7 +369,6 @@ async function processServer(server, idx, isMovie, season, episode, clean, durat
       }
     }
 
-    // Split into individual URLs (blank-line / newline separated)
     const urls = resolved.split(/\s*\n+\s*/).map(u => u.trim()).filter(Boolean);
     if (!urls.length) return [];
 
@@ -372,31 +384,49 @@ async function processServer(server, idx, isMovie, season, episode, clean, durat
   }
 }
 
-// ============ Main entry ============
+// ============ Main entry (FIXED: path params + BASEDOM from redirect) ============
 
 async function getStreams(tmdbId, type, season, episode) {
   try {
     const isMovie = type === 'movie';
     const embedUrl = isMovie
-      ? `https://vidsrc.me/embed/movie?tmdb=${tmdbId}`
-      : `https://vidsrc.me/embed/tv?tmdb=${tmdbId}&season=${season || 1}&episode=${episode || 1}`;
+      ? `https://vidsrc.me/embed/${tmdbId}`
+      : `https://vidsrc.me/embed/tv/${tmdbId}/${season || 1}-${episode || 1}`;
 
-    console.log('[VidSrc] Fetching embed page: ' + embedUrl);
+    console.log('[VidSrc] Fetching: ' + embedUrl);
 
-    // Fetch embed page + duration concurrently
     const [embedRes, duration] = await Promise.all([
       safeFetch(embedUrl, {}, T_EMBED),
       fetchTMDBDuration(tmdbId, type, season, episode)
     ]);
 
+    // ★ Derive BASEDOM from the FINAL URL after redirects.
+    try {
+      const finalOrigin = new URL(embedRes.url).origin;
+      if (finalOrigin !== BASEDOM) {
+        console.log('[VidSrc] BASEDOM from redirect: ' + finalOrigin);
+        BASEDOM = finalOrigin;
+      }
+    } catch (_) {}
+
     const html = await embedRes.text();
     const { servers, title } = serversLoad(html);
     const clean = cleanTitleString(title);
 
-    console.log('[VidSrc] Parsed servers: ' + servers.length);
-    if (!servers.length) return [];
+    console.log('[VidSrc] BASEDOM=' + BASEDOM +
+                ' htmlLen=' + html.length +
+                ' servers=' + servers.length +
+                ' title="' + title + '"');
 
-    // Process every server simultaneously
+    if (!servers.length) {
+      const iHash = html.indexOf('data-hash');
+      const iId   = html.indexOf('data-id');
+      const iSrv  = html.search(/class="[^"]*server/i);
+      console.log('[VidSrc] diag: data-hash@' + iHash +
+                  ' data-id@' + iId + ' server@' + iSrv);
+      return [];
+    }
+
     const results = await Promise.all(
       servers.map((srv, i) =>
         processServer(srv, i, isMovie, season, episode, clean, duration)
