@@ -509,6 +509,14 @@ return Object.assign({},r,{boundary:false})
 }finally{await unlock(st,id)}
 }
 async function boundaryState(id,s,e){const st=db(),ss=await readSeason(st,id,s);if(!ss)return{boundary:false};const isBoundary=Number(ss.mappedThrough)===e;return{boundary:isBoundary,seasonComplete:!!ss.complete,totalEpisodes:Number(ss.totalEpisodes||0),mappedThrough:Number(ss.mappedThrough||0)}}
+async function eligibilityState(id){
+ try{
+  const record=await readSeries(db(),id);
+  if(record&&record.animeEligible===true)return"anime";
+  if(record&&record.animeEligible===false&&record.animeEligibilityReason==="NO_ANIME_SOURCE")return"non_anime";
+ }catch(e){}
+ return"unknown"
+}
 function origin(event){
 const h=event&&event.headers||{},host=h.host||h.Host||"";
 if(host)return`${String(h["x-forwarded-proto"]||h["X-Forwarded-Proto"]||"https").split(",")[0]}://${host}`;
@@ -518,8 +526,10 @@ async function triggerBackground(event,seed){
 const base=origin(event);
 if(!base)return false;
 const url=`${base}/.netlify/functions/anime-lazy-populate-background`;
+const internalSecret=String(process.env.ANIME_POPULATION_SECRET||process.env.NETLIFY_AUTH_TOKEN||"");
+if(!internalSecret){log("LAZY POPULATION BLOCKED: internal trigger secret is not configured");return false}
 try{
-void fetch(url,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},body:JSON.stringify(seed)}).then(r=>log(`LAZY POPULATION START TMDB=${seed.tmdb_id} S${seed.season}E${seed.episode} HTTP=${r.status}`)).catch(e=>log(`LAZY POPULATION TRIGGER FAILED ${String(e)}`));
+void fetch(url,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json","Authorization":"Bearer "+internalSecret},body:JSON.stringify(seed)}).then(r=>log(`LAZY POPULATION START TMDB=${seed.tmdb_id} S${seed.season}E${seed.episode} HTTP=${r.status}`)).catch(e=>log(`LAZY POPULATION TRIGGER FAILED ${String(e)}`));
 return true
 }catch(error){log(`LAZY POPULATION LAUNCH FAILED ${String(error)}`);return false}
 }
@@ -543,9 +553,10 @@ if(!/^\d+$/.test(id)||id.length>MAX_ID||s===null||!e)return json(400,{ok:false,e
 const hit=await sharedLookup(id,s,e);
 if(hit){
 log(`RESULT source=${hit.source} time=${Date.now()-started}ms`);
-return json(200,{ok:true,source:hit.source,updatedAt:Date.now(),mapping:hit.mapping,state:await boundaryState(id,s,e)})
+return json(200,{ok:true,source:hit.source,updatedAt:Date.now(),mapping:hit.mapping,eligibility:"anime",state:await boundaryState(id,s,e)})
 }
-if(String(p.pending||"")!=="1"){
+const explicitPopulation=String(p.populate||"")==="1"&&String(p.trigger||"")==="anizone-lazy"&&String(p.pending||"")!=="1";
+if(explicitPopulation){
 const seed={tmdb_id:id,season:s,episode:e};
 const launched=await triggerBackground(event,seed);
 if(launched){
@@ -556,8 +567,9 @@ return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:p
 }
 }
 }
-log(`RESULT source=pending time=${Date.now()-started}ms`);
-return json(202,{ok:false,pending:true,mapping:null,error:"Anime mapping population in progress",state:await boundaryState(id,s,e)})
+const eligibility=await eligibilityState(id);
+log(`RESULT source=pending eligibility=${eligibility} time=${Date.now()-started}ms`);
+return json(202,{ok:false,pending:true,mapping:null,eligibility,error:eligibility==="non_anime"?"Title is not eligible for anime mapping":"Anime mapping unavailable or population pending",state:await boundaryState(id,s,e)})
 }catch(error){
 console.error("[ANIME LAZY MAPPING] FATAL",error);
 return json(500,{ok:false,error:error&&error.message?error.message:"Mapping service error"})

@@ -3,6 +3,13 @@ function log(x){console.log(`[ANIME LAZY BG] ${x}`)}
 function body(event){try{return JSON.parse(event&&event.body||"{}")}catch(e){return null}}
 const POPULATE_DEADLINE_MS=90000;
 exports.handler=async event=>{
+const expected=String(process.env.ANIME_POPULATION_SECRET||process.env.NETLIFY_AUTH_TOKEN||"");
+const headers=event&&event.headers||{};
+const authorization=String(headers.authorization||headers.Authorization||"");
+if(!expected||authorization!=="Bearer "+expected){
+log("UNAUTHORIZED POPULATION REQUEST");
+return{statusCode:403,body:JSON.stringify({ok:false,error:"Forbidden"})}
+}
 const seed=body(event);
 if(!seed){log("INVALID JSON BODY");return{statusCode:400,body:JSON.stringify({ok:false,error:"Invalid JSON body"})}}
 try{
