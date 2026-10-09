@@ -193,38 +193,41 @@ function seasonRules(season){
   ]}
 }
 
-function matchCard(cards,targetTitles,baseTitle,season=1,seasonName=""){
-  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))],base=normalize(baseTitle),sn=normalize(seasonName),s=Number(season)||1;
-  if(sn&&sn!=="season"+s){
-    for(const c of cards)for(const t of cardTitles(c))if(normalize(t).includes(sn))return c.slug
-  }
-  for(const target of targets)for(const c of cards)for(const t of cardTitles(c))if(normalize(t)===target)return c.slug;
-  const rules=seasonRules(s);
+function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTitle=""){
+  const normalizeTitle=v=>String(v||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g," ").trim().replace(/\s+/g," ");
+  const targets=[...new Set((targetTitles||[]).map(normalizeTitle).filter(Boolean))];
+  const base=normalizeTitle(baseTitle),sn=normalizeTitle(seasonName),en=normalizeTitle(episodeTitle),seasonNo=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
+  const scored=[];
   for(const c of cards){
-    const titles=cardTitles(c);
-    let baseMatch=false;
-    for(const t of titles){
-      const n=normalize(t);
-      if(!base||n.includes(base)||base.includes(n)){baseMatch=true;break}
+    const titles=cardTitles(c).map(normalizeTitle).filter(Boolean);
+    if(!titles.length)continue;
+    let identity=0,seasonEvidence=0;
+    for(const n of titles){
+      if(targets.includes(n))identity=Math.max(identity,100);
+      // Allow a provider's season-qualified title only when the mapped canonical title
+      // is a complete title component, not an arbitrary substring.
+      if(targets.some(t=>n===t+" "+sn||n===sn+" "+t))identity=Math.max(identity,120);
+      if(base&&(n===base||n.startsWith(base+" ")||n.endsWith(" "+base)))identity=Math.max(identity,75);
+      if(sn&&sn!=="season "+seasonNo&&(n===sn||n.endsWith(" "+sn)||n.includes(" "+sn+" ")))seasonEvidence=Math.max(seasonEvidence,15);
+      if(en&&n===en)seasonEvidence=Math.max(seasonEvidence,5);
     }
-    if(!baseMatch)continue;
-    if(s===1){
-      if(rules.mustNot.some(r=>titles.some(t=>r.test(t))))continue;
-      return c.slug
-    }
-    if(titles.some(t=>rules.must.some(r=>r.test(t))))return c.slug
+    if(identity>0)scored.push({slug:cardSlug(c),score:identity+seasonEvidence});
   }
-  return cards[0]?cards[0].slug:null
+  scored.sort((a,b)=>b.score-a.score);
+  if(!scored.length)return null;
+  if(scored.length>1&&scored[0].score===scored[1].score)return null;
+  return scored[0].slug||null;
 }
 
 function matchMovieCard(cards,targetTitles){
-  const targets=[...new Set((targetTitles||[]).map(normalize).filter(Boolean))];
-  for(const c of cards)for(const t of cardTitles(c))if(targets.includes(normalize(t)))return c.slug;
-  for(const c of cards)for(const t of cardTitles(c)){
-    const n=normalize(t);
-    if(targets.some(x=>n.includes(x)||x.includes(n)))return c.slug
+  const normalizeTitle=v=>String(v||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g," ").trim().replace(/\s+/g," ");
+  const targets=[...new Set((targetTitles||[]).map(normalizeTitle).filter(Boolean))];
+  const matches=[];
+  for(const c of cards){
+    if(cardTitles(c).some(t=>targets.includes(normalizeTitle(t))))matches.push(cardSlug(c));
   }
-  return cards[0]?cards[0].slug:null
+  const unique=[...new Set(matches.filter(Boolean))];
+  return unique.length===1?unique[0]:null;
 }
 
 async function searchCards(q){
@@ -288,27 +291,34 @@ async function episodePage(slug,ep){
   return{html,cookie}
 }
 
-async function getTmdbInfo(tmdbId,mediaType,season=1){
+async function getTmdbInfo(tmdbId,mediaType,season=1,episode=1){
   const type=mediaType==="movie"?"movie":"tv";
   const url="https://api.themoviedb.org/3/"+type+"/"+encodeURIComponent(tmdbId)+"?api_key="+TMDB_API_KEY+"&language=en-US";
   const d=await json(url,{headers:{"Accept":"application/json"}},7000);
   if(!d)return null;
+  let seasonData=null;
+  if(type==="tv"){
+    seasonData=await json("https://api.themoviedb.org/3/tv/"+encodeURIComponent(tmdbId)+"/season/"+encodeURIComponent(Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1)+"?api_key="+TMDB_API_KEY+"&language=en-US",{headers:{"Accept":"application/json"}},7000);
+  }
+  const requestedEpisode=seasonData&&Array.isArray(seasonData.episodes)?seasonData.episodes.find(x=>Number(x.episode_number)===(Number(episode)||1)):null;
   return{
     title:d.name||d.title||d.original_name||d.original_title||"",
     originalTitle:d.original_name||d.original_title||"",
-    seasonName:""
+    seasonName:seasonData&&seasonData.name||"",
+    episodeTitle:requestedEpisode&&requestedEpisode.name||"",
+    seasonEpisodeCount:seasonData&&Array.isArray(seasonData.episodes)?seasonData.episodes.length:0
   }
 }
 
 async function dbMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
-  season=Number(season)||1;
+  season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
   episode=Number(episode)||1;
   if(!tmdbId){
     console.log("[AniZone Lazy] REFUSING EMPTY TMDB ID");
     return null
   }
-  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode;
+  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&pending=1";
   const d=await json(u,{headers:{"Accept":"application/json"}},8000);
   if(d&&d.ok&&d.mapping){
     console.log("[AniZone Lazy] DB HIT",{tmdbId,season,episode,boundary:!!(d.state&&d.state.boundary)});
@@ -346,7 +356,7 @@ function mapTitle(m){
 
 function mapEp(m,fallback){
   const n=Number(m&&(m.mal_episode!=null?m.mal_episode:m.episode!=null?m.episode:m.malEpisode));
-  return Number.isFinite(n)&&n>0?n:Number(fallback)||1
+  return Number.isInteger(n)&&n>0?n:null
 }
 
 function mapTitles(m){
@@ -370,10 +380,10 @@ function cleanQuery(s){
   return String(s||"").split(":")[0].replace(/season.*|\d+(?:st|nd|rd|th)\s+season|saison.*/i,"").trim()
 }
 
-async function resolveStream(tmdbId,mediaType,season,episode){
+async function resolveStream(tmdbId,mediaType,season,episode,settings){
   tmdbId=String(tmdbId||"").trim();
   mediaType=String(mediaType||"tv").toLowerCase();
-  season=Number(season)||1;
+  season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
   episode=Number(episode)||1;
   if(!tmdbId){
     console.log("[AniZone Lazy] ABORT EMPTY TMDB ID");
@@ -388,13 +398,18 @@ async function resolveStream(tmdbId,mediaType,season,episode){
   if(!movie){
     mappingResult=await dbMapping(tmdbId,season,episode);
     if(!mappingResult||!mappingResult.mapping){
-      const polled=await pollLazyMapping(tmdbId,season,episode,8000);
-      if(polled&&polled.mapping){
-        console.log("[AniZone Lazy] POLL SUCCESS");
-        mappingResult=polled
-      }else{
-        console.log("[AniZone Lazy] POLL TIMED OUT");
+      const autoPopulate=!["false","0","disabled","off"].includes(String(getSetting(settings,["autoPopulateMissingMappings","auto_populate_missing_mappings","autoPopulate","autoPopulateMappings"],"enabled")).toLowerCase());
+      if(!autoPopulate){
+        console.log("[AniZone Lazy] AUTO POPULATION DISABLED — READ ONLY");
         return[]
+      }
+      const triggerUrl=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&populate=1&trigger=anizone-lazy";
+      const triggered=await json(triggerUrl,{headers:{"Accept":"application/json"}},8000);
+      if(triggered&&triggered.ok&&triggered.mapping)mappingResult={mapping:triggered.mapping,fromDb:true,state:triggered.state||null};
+      else {
+        const polled=await pollLazyMapping(tmdbId,season,episode,8000);
+        if(polled&&polled.mapping){console.log("[AniZone Lazy] POLL SUCCESS");mappingResult=polled}
+        else {console.log("[AniZone Lazy] POPULATION PENDING OR UNAVAILABLE");return[]}
       }
     }
 
@@ -402,6 +417,7 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     title=mapTitle(m);
     targetTitles=mapTitles(m);
     malEpisode=mapEp(m,episode);
+    if(!malEpisode){console.log("[AniZone Lazy] MAPPING HAS NO VALID PROVIDER EPISODE",{tmdbId,season,episode});return[]}
     imdbId=mapImdb(m);
     malId=mapMalId(m);
     seasonName=String(m.season_name||m.seasonName||"");
@@ -417,14 +433,14 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
   }
 
-  const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season):null;
+  const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season,episode):null;
   if(tmdbInfo){
     if(tmdbInfo.title&&!title)title=tmdbInfo.title;
     if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
     seasonName=seasonName||tmdbInfo.seasonName||""
   }
 
-  const specific=targetTitles.length?targetTitles:[title,...altTitles].filter(Boolean);
+  const specific=[...new Set([...targetTitles,title,...altTitles].filter(Boolean))];
   const base=cleanQuery(title);
 
   let cards=await searchCards(base);
@@ -443,7 +459,8 @@ async function resolveStream(tmdbId,mediaType,season,episode){
     return[]
   }
 
-  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,season,seasonName);
+  const seasonEvidence=tmdbInfo&&tmdbInfo.episodeTitle||"";
+  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,season,seasonName,seasonEvidence);
 
   if(!slug){
     console.log("[AniZone Lazy] CARD NOT FOUND",{title,season,results:cards.length});
@@ -590,13 +607,22 @@ async function resolveStream(tmdbId,mediaType,season,episode){
   return streams
 }
 
-async function getStreams(tmdbId,mediaType,season,episode,settings){
+function getSetting(settings,names,fallback){
+  if(!settings||typeof settings!=="object")return fallback;
+  for(const n of names)if(Object.prototype.hasOwnProperty.call(settings,n)&&settings[n]!==undefined&&settings[n]!==null)return settings[n];
+  return fallback
+}
+function onSettings(){
+  return [{type:"select",key:"autoPopulateMissingMappings",name:"autoPopulateMissingMappings",label:"Auto-populate missing mappings",options:[{label:"Enabled",value:"enabled"},{label:"Disabled",value:"disabled"}],default:"enabled"}]
+}
+async function getStreams(tmdbId,mediaType,season,episode,settings={}){
   try{
     return await resolveStream(
       String(tmdbId||""),
       String(mediaType||"tv"),
-      Number(season)||1,
-      Number(episode)||1
+      Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1,
+      Number(episode)||1,
+      settings
     )
   }catch(e){
     console.log("[AniZone Lazy] ERROR",String(e));
@@ -604,4 +630,4 @@ async function getStreams(tmdbId,mediaType,season,episode,settings){
   }
 }
 
-module.exports={getStreams};
+module.exports={getStreams,onSettings};

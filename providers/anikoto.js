@@ -903,7 +903,9 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     CACHE.set(key,p,1800000);
     try{
       const v=await p;
-      return CACHE.set(key,v,1800000)
+      if(v&&v.length)return CACHE.set(key,v,1800000);
+      CACHE.delete(key);
+      return v
     }catch(e){
       CACHE.delete(key);
       log("ERROR "+String(e&&e.message||e));

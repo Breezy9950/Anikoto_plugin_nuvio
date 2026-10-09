@@ -42,10 +42,12 @@ async function reanimeReq(path,opt,ms){
 async function mapperLookup(tmdbId,season,episode){
   const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&pending=1";
   const d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},5000);
-  if(!d||!d.ok||!d.mapping)return null;
+  if(!d)return{state:"temporary",eligibility:"unknown"};
+  if(d.eligibility==="non_anime")return{state:"non_anime",eligibility:"non_anime"};
+  if(!d.ok||!d.mapping)return{state:"miss",eligibility:d.eligibility||"unknown"};
   const m=d.mapping,malId=String(m.mal_id||m.malId||"").trim(),malEpisode=Number(m.mal_episode||m.target_episode||0);
-  if(!malId||!malEpisode)return null;
-  return{malId,malEpisode,title:String(m.anime_title||m.title||"").trim()}
+  if(!malId||!Number.isInteger(malEpisode)||malEpisode<1)return{state:"miss",eligibility:d.eligibility||"anime"};
+  return{state:"hit",eligibility:"anime",malId,malEpisode,title:String(m.anime_title||m.title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}
 }
 
 async function malToAnilist(malId){
@@ -151,23 +153,26 @@ async function searchReanime(query){
   })
 }
 
-function normTitle(s){return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim()}
+function normTitle(s){return String(s||"").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]+/g," ").trim().replace(/\s+/g," ")}
 
 function scoreTitle(candidate,info){
-  const targets=[info.title,info.originalTitle].filter(Boolean).map(normTitle).filter(Boolean);
-  let best=0;
-  for(const t of candidate.titles||[]){
-    const n=normTitle(t);
-    if(!n)continue;
-    for(const target of targets){
-      if(n===target)best=Math.max(best,100);
-      else if(n.includes(target)||target.includes(n))best=Math.max(best,50)
-    }
-  }
-  return best
+  const targets=[info.title,info.originalTitle,...(info.aliases||[])].filter(Boolean).map(normTitle).filter(Boolean);
+  const names=(candidate.titles||[]).map(normTitle).filter(Boolean);
+  return names.some(n=>targets.includes(n))?100:0;
 }
 
-async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo){
+async function anilistDetails(alId){
+  const q="query($id:Int){Media(id:$id,type:ANIME){id episodes title{english romaji native}}}";
+  const d=await json(ANILIST_URL,{method:"POST",headers:Object.assign({},HEADERS,{"Content-Type":"application/json"}),body:JSON.stringify({query:q,variables:{id:parseInt(alId,10)}})},3500);
+  const m=d&&d.data&&d.data.Media;
+  return m&&m.id?{id:m.id,episodes:Number(m.episodes)||0,title:(m.title&&(m.title.english||m.title.romaji||m.title.native))||""}:null;
+}
+
+async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,eligibility){
+  // Native fallback is permitted only for confirmed anime. A mapping miss or a
+  // timeout is not itself evidence of anime eligibility.
+  if(eligibility!=="anime")return null;
+  if(mediaType!=="movie"&&Number(season)!==1)return null;
   const info=prefetchedInfo||await tmdbInfo(tmdbId,mediaType);
   if(!info||!info.title)return null;
   const queries=[info.title];
@@ -175,15 +180,19 @@ async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo){
   const all=[];
   const results=await Promise.all(queries.map(q=>searchReanime(q).catch(()=>[])));
   for(const r of results)for(const x of r)if(!all.some(y=>y.anilistId===x.anilistId))all.push(x);
-  if(!all.length)return null;
-  const scored=all.map(x=>({x,score:scoreTitle(x,info)}));
-  scored.sort((a,b)=>b.score-a.score);
-  const best=scored[0];
-  if(!best||best.score<=0)return null;
-  return{alId:best.x.anilistId,title:best.x.title||info.title,episode:mediaType==="movie"?1:episode,malId:null}
+  const scored=all.map(x=>({x,score:scoreTitle(x,info)})).filter(x=>x.score===100);
+  if(!scored.length)return null;
+  const ids=[...new Set(scored.map(x=>x.x.anilistId))];
+  if(ids.length!==1)return null;
+  const candidate=scored.find(x=>x.x.anilistId===ids[0]).x;
+  const details=await anilistDetails(candidate.anilistId);
+  if(!details)return null;
+  const targetEpisode=mediaType==="movie"?1:Number(episode);
+  if(!Number.isInteger(targetEpisode)||targetEpisode<1)return null;
+  if(mediaType!=="movie"&&(!details.episodes||targetEpisode>details.episodes))return null;
+  return{alId:candidate.anilistId,title:candidate.title||details.title||info.title,episode:targetEpisode,malId:null};
 }
 
-// ---------- Build streams ----------
 async function buildStreams(resolved,mediaType){
   const servers=await flixServers(resolved.alId,resolved.episode).catch(()=>null);
   if(!Array.isArray(servers)||!servers.length)return[];
@@ -239,28 +248,36 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     const p=(async()=>{
       // Prefetch TMDB info in parallel with mapper — only used if mapper misses.
       const tmdbPromise=tmdbInfo(id,type).catch(()=>null);
-      let resolved=null,source="mapper";
+      let resolved=null,source="mapper",eligibility="unknown";
       try{
         const m=await timeout(mapperLookup(id,mapSeason,mapEpisode),5000);
         if(m){
-          const al=await timeout(malToAnilist(m.malId),3500);
-          if(al){
-            resolved={alId:al.id,title:m.title||al.title,episode:m.malEpisode,malId:m.malId};
-            log("Mapper hit MAL="+m.malId+" AL="+al.id+" E"+m.malEpisode);
-          }else log("Mapper hit but MAL->AL failed MAL="+m.malId);
-        }else log("Mapper miss TMDB="+id+" S"+s+"E"+e);
+          eligibility=m.eligibility||"unknown";
+          if(m.state==="non_anime"){
+            log("Confirmed non-anime; native fallback blocked TMDB="+id);
+            return[];
+          }
+          if(m.state==="hit"){
+            const al=await timeout(malToAnilist(m.malId),3500);
+            if(al){
+              resolved={alId:al.id,title:m.title||al.title,episode:m.malEpisode,malId:m.malId};
+              eligibility="anime";
+              log("Mapper hit MAL="+m.malId+" AL="+al.id+" E"+m.malEpisode);
+            }else log("Mapper hit but MAL->AL failed MAL="+m.malId);
+          }else log("Mapper miss TMDB="+id+" S"+s+"E"+e+" eligibility="+eligibility);
+        }
       }catch(err){log("Mapper error: "+err.message)}
       let streams=[];
       if(resolved){
         try{streams=await timeout(buildStreams(resolved,type),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
-      if(!streams.length){
-        log("Falling back to native");
+      if(!streams.length&&eligibility==="anime"){
+        log("Trying strict native fallback for confirmed anime");
         source="native";
         try{
           const info=await timeout(tmdbPromise,3500);
-          const native=await timeout(resolveNative(id,type,s,e,info),7000);
+          const native=await timeout(resolveNative(id,type,s,e,info,eligibility),7000);
           if(native){resolved=native;streams=await timeout(buildStreams(native,type),10000)}
         }catch(err){log("Native error: "+err.message)}
       }
@@ -268,7 +285,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       return streams
     })();
     CACHE.set(key,p,1800000);
-    try{const out=await p;CACHE.set(key,out,1800000);return out}
+    try{const out=await p;if(out&&out.length)CACHE.set(key,out,1800000);else CACHE.delete(key);return out}
     catch(err){CACHE.delete(key);return[]}
   }catch(err){log("Fatal: "+(err&&err.message||err));return[]}
 }
