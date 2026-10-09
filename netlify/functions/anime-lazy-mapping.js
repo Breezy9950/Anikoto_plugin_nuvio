@@ -542,13 +542,148 @@ await new Promise(resolve=>setTimeout(resolve,MAPPING_POLL_MS));
 }
 return null
 }
+
+const MOVIE_PREFIX="anime:movie:",FRANCHISE_PREFIX="anime:franchise:",MOVIE_MAX=12;
+function validTmdbId(id){return /^\d{1,10}$/.test(String(id||""))&&Number(id)>0}
+async function tmdbMovie(id,path=""){
+ const r=await fetchJson(`https://api.themoviedb.org/3/movie/${encodeURIComponent(id)}${path}${path.includes("?")?"&":"?"}api_key=${encodeURIComponent(TMDB_KEY)}`,7000);
+ return r.data;
+}
+async function movieEligibility(id,old,meta){
+ if(old&&old.media_type==="movie"&&old.animeEligible===true&&old.mal_id)return{ok:true,mal:String(old.mal_id),source:"stored"};
+ const imdb=meta&&meta.imdb_id||old&&old.imdb_id||null;
+ const [ar,azr]=await Promise.all([
+  arm(id,imdb,null),
+  fetchJson(`https://api.ani.zip/mappings?themoviedb_id=${encodeURIComponent(id)}`,5000)
+ ]);
+ const az=azr&&azr.data;
+ const candidates=uniq([...(ar.ids||[]),...aniIds(az)]).slice(0,4);
+ let temporary=false;
+ const tmdbNames=[meta&&meta.title,meta&&meta.original_title].map(normTitle).filter(Boolean);
+ const aniNames=az&&az.titles&&typeof az.titles==="object"?Object.values(az.titles).map(normTitle).filter(Boolean):[];
+ for(const mal of candidates){
+  try{
+   const jr=await fetchJson(`https://api.jikan.moe/v4/anime/${encodeURIComponent(mal)}`,5000);
+   if(jr.state!=="HIT"||!jr.data||!jr.data.data){temporary=true;continue}
+   const d=jr.data.data;
+   if(String(d.type||"").toLowerCase()!=="movie")continue;
+   const malNames=[d.title,d.title_english,d.title_japanese,...(Array.isArray(d.titles)?d.titles.map(x=>x&&x.title):[])].map(normTitle).filter(Boolean);
+   if(!malNames.some(n=>tmdbNames.includes(n)||aniNames.includes(n))){temporary=true;continue}
+   return{ok:true,mal:String(d.mal_id||mal),source:"authoritative",malTitle:d.title||d.title_english||"",providerIds:{}};
+  }catch(e){temporary=true}
+ }
+ const states=[...(ar.states||[]),azr&&azr.state||"UNKNOWN"];
+ const successful=states.length>0&&states.every(x=>x==="HIT"||x==="MISS");
+ if(!candidates.length&&successful&&!temporary)return{ok:false,temporary:false,source:"NO_ANIME_SOURCE"};
+ if(candidates.length&&successful&&!temporary)return{ok:false,temporary:false,source:"NOT_AN_ANIME_MOVIE"};
+ return{ok:false,temporary:true,source:"UNKNOWN"};
+}
+async function readMovieRecord(id){
+ try{
+  const m=await db().get(`${MOVIE_PREFIX}${id}`,{type:"json",consistency:"eventual"});
+  return m&&m.media_type==="movie"&&String(m.tmdb_id)===String(id)?m:null;
+ }catch(e){log(`MOVIE READ FAILED TMDB=${id} ${e.message}`);return null}
+}
+async function lookupMovie(id){
+ const m=await readMovieRecord(id);
+ return m&&m.animeEligible===true&&m.mal_id?m:null;
+}
+async function movieCandidates(id,collectionId){
+ const out=[],seen=new Set([String(id)]);
+ if(collectionId){
+  const c=await fetchJson(`https://api.themoviedb.org/3/collection/${encodeURIComponent(collectionId)}?api_key=${encodeURIComponent(TMDB_KEY)}`,7000);
+  for(const p of c.data&&Array.isArray(c.data.parts)?c.data.parts:[]){
+   const n=String(p&&p.id||"");
+   if(validTmdbId(n)&&!seen.has(n)&&out.length<MOVIE_MAX-1){seen.add(n);out.push(n)}
+  }
+ }
+ return out;
+}
+async function populateMovieFranchise(id){
+ const st=db(),lockKey=`building:movie:${id}`,now=Date.now();
+ const existing=await lookupMovie(id);if(existing)return{ok:true,existing:true,movie:existing};
+ const storedInitial=await readMovieRecord(id);
+ if(storedInitial&&storedInitial.eligibility_status==="confirmed_non_anime")return{ok:true,eligible:false,reason:storedInitial.eligibility_reason||"NO_ANIME_SOURCE"};
+ const old=await st.get(lockKey,{type:"json",consistency:"eventual"}).catch(()=>null);
+ if(old&&Number(old.expiresAt)>now)return{ok:true,locked:true};
+ const lock=await st.setJSON(lockKey,{tmdb_id:id,media_type:"movie",startedAt:now,expiresAt:now+LOCK_TTL},{onlyIfNew:true}).catch(()=>null);
+ if(!lock||!lock.modified)return{ok:true,locked:true};
+ let franchiseLockKey=null,franchiseLockOwned=false;
+ try{
+  const requested=await tmdbMovie(id);
+  if(!requested||Number(requested.id)!==Number(id))throw new Error("TMDB movie metadata unavailable");
+  const collectionId=requested.belongs_to_collection&&requested.belongs_to_collection.id?String(requested.belongs_to_collection.id):null;
+  if(collectionId){
+   franchiseLockKey=`building:franchise:${collectionId}`;
+   const priorLock=await st.get(franchiseLockKey,{type:"json",consistency:"eventual"}).catch(()=>null);
+   if(priorLock&&Number(priorLock.expiresAt)>Date.now())return{ok:true,locked:true,franchise_id:collectionId};
+   if(priorLock)await st.delete(franchiseLockKey).catch(()=>{});
+   const franchiseLock=await st.setJSON(franchiseLockKey,{franchise_id:collectionId,startedAt:Date.now(),expiresAt:Date.now()+LOCK_TTL},{onlyIfNew:true}).catch(()=>null);
+   if(!franchiseLock||!franchiseLock.modified)return{ok:true,locked:true,franchise_id:collectionId};
+   franchiseLockOwned=true;
+  }
+  // The requested movie itself must pass authoritative anime identification before
+  // it can authorize any related franchise work.
+  const requestedEligibility=await movieEligibility(id,null,requested);
+  if(!requestedEligibility.ok){
+   if(requestedEligibility.temporary)throw new Error("Movie anime eligibility is temporarily unknown");
+   await st.setJSON(`${MOVIE_PREFIX}${id}`,{tmdb_id:String(id),media_type:"movie",animeEligible:false,eligibility_status:"confirmed_non_anime",eligibility_reason:requestedEligibility.source,franchise_id:collectionId,updatedAt:Date.now()});
+   return{ok:true,eligible:false,reason:requestedEligibility.source};
+  }
+  const requestedRecord={tmdb_id:String(id),media_type:"movie",mal_id:String(requestedEligibility.mal),mal_title:requestedEligibility.malTitle||null,provider_ids:requestedEligibility.providerIds||{},imdb_id:requested.imdb_id||null,title:requested.title||"",original_title:requested.original_title||"",franchise_id:collectionId,animeEligible:true,eligibility_status:"verified",mapping_source:requestedEligibility.source,updatedAt:Date.now()};
+  const oldRequested=await readMovieRecord(id);
+  if(!oldRequested||oldRequested.animeEligible!==true)await st.setJSON(`${MOVIE_PREFIX}${id}`,requestedRecord);
+  const ids=(await movieCandidates(id,collectionId)).slice(0,MOVIE_MAX-1);
+  const resolved=[requestedRecord];
+  for(let i=0;i<ids.length;i+=2){
+   const batch=await Promise.all(ids.slice(i,i+2).map(async movieId=>{
+    const meta=await tmdbMovie(movieId);
+    if(!meta||Number(meta.id)!==Number(movieId))return null;
+    const stored=await readMovieRecord(movieId);
+    if(stored&&stored.eligibility_status==="confirmed_non_anime")return null;
+    if(stored&&stored.animeEligible===true&&stored.mal_id)return stored;
+    const elig=await movieEligibility(movieId,stored,meta);
+    if(!elig.ok){
+     if(!elig.temporary)await st.setJSON(`${MOVIE_PREFIX}${movieId}`,{tmdb_id:movieId,media_type:"movie",animeEligible:false,eligibility_status:"confirmed_non_anime",eligibility_reason:elig.source,franchise_id:collectionId,updatedAt:Date.now()});
+     return null;
+    }
+    return{tmdb_id:String(movieId),media_type:"movie",mal_id:String(elig.mal),mal_title:elig.malTitle||null,provider_ids:elig.providerIds||{},imdb_id:meta.imdb_id||null,title:meta.title||"",original_title:meta.original_title||"",franchise_id:collectionId,animeEligible:true,eligibility_status:"verified",mapping_source:elig.source,updatedAt:Date.now()};
+   }));
+   for(const rec of batch)if(rec&&rec.media_type==="movie"&&rec.animeEligible===true)resolved.push(rec);
+  }
+  for(const rec of resolved){
+   const prior=await lookupMovie(rec.tmdb_id);
+   if(!prior)await st.setJSON(`${MOVIE_PREFIX}${rec.tmdb_id}`,rec);
+  }
+  const franchiseId=collectionId||`movie-${id}`;
+  const priorFranchise=await st.get(`${FRANCHISE_PREFIX}${franchiseId}`,{type:"json",consistency:"eventual"}).catch(()=>null);
+  const movieIds=uniq([...(priorFranchise&&Array.isArray(priorFranchise.movies)?priorFranchise.movies.map(x=>x&&x.tmdb_id):[]),...resolved.map(x=>x.tmdb_id)]).slice(0,MOVIE_MAX);
+  await st.setJSON(`${FRANCHISE_PREFIX}${franchiseId}`,{franchise_id:franchiseId,collection_tmdb_id:collectionId,media_type:"franchise",tv_series_tmdb_ids:priorFranchise&&Array.isArray(priorFranchise.tv_series_tmdb_ids)?priorFranchise.tv_series_tmdb_ids:[],seasons:priorFranchise&&Array.isArray(priorFranchise.seasons)?priorFranchise.seasons:[],movies:movieIds.map(movie_tmdb_id=>({tmdb_id:movie_tmdb_id,media_type:"movie"})),updatedAt:Date.now()});
+  return{ok:true,mapped:resolved.length,franchise_id:franchiseId};
+ }finally{
+  await st.delete(lockKey).catch(()=>{});
+  if(franchiseLockKey&&franchiseLockOwned)await st.delete(franchiseLockKey).catch(()=>{});
+ }
+}
 exports.handler=async event=>{
 const started=Date.now(),method=(event.httpMethod||"GET").toUpperCase();
 if(method==="OPTIONS")return json(204,{});
 if(method!=="GET")return json(405,{ok:false,error:"Method not allowed"});
 try{
-const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode);
-log(`REQUEST TMDB=${id} S${p.season}E${p.episode}`);
+const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode),mediaType=String(p.mediaType||p.media_type||"tv").toLowerCase();
+log(`REQUEST TMDB=${id} type=${mediaType} S${p.season}E${p.episode}`);
+if(mediaType==="movie"){
+ if(!validTmdbId(id))return json(400,{ok:false,error:"A valid TMDB movie ID is required"});
+ const hit=await lookupMovie(id);
+ if(hit)return json(200,{ok:true,mediaType:"movie",mapping:hit,eligibility:"anime"});
+ const explicit=String(p.populate||"")==="1"&&String(p.trigger||"")==="anizone-lazy"&&String(p.pending||"")!=="1"&&String(p.operation||"")==="movie-franchise";
+ if(explicit){
+  const launched=await triggerBackground(event,{media_type:"movie",operation:"movie-franchise",tmdb_id:id});
+  if(launched)return json(202,{ok:false,pending:true,mediaType:"movie",mapping:null,eligibility:"unknown"});
+ }
+ return json(202,{ok:false,pending:true,mediaType:"movie",mapping:null,eligibility:"unknown"});
+}
+if(mediaType!=="tv")return json(400,{ok:false,error:"Unsupported media type"});
 if(!/^\d+$/.test(id)||id.length>MAX_ID||s===null||!e)return json(400,{ok:false,error:"tmdbId, season and episode are required"});
 const hit=await sharedLookup(id,s,e);
 if(hit){
@@ -576,3 +711,5 @@ return json(500,{ok:false,error:error&&error.message?error.message:"Mapping serv
 }
 };
 exports.populateIfNeeded=populateIfNeeded;
+exports.populateMovieFranchise=populateMovieFranchise;
+exports.lookupMovie=lookupMovie;
