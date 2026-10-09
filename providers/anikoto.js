@@ -196,44 +196,6 @@ async function mapperLookup(tmdbId,season,episode){
   }
 }
 
-async function movieMapperLookup(tmdbId){
-  const id=String(tmdbId||"").trim();
-  if(!/^\d{1,10}$/.test(id)||Number(id)<=0)return null;
-  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(id)+"&tmdbId="+encodeURIComponent(id)+"&mediaType=movie&pending=1";
-  const d=await getJson(u,{headers:{"Accept":"application/json","User-Agent":UA}},5000);
-  const m=d&&d.ok&&d.mapping;
-  if(!m||m.media_type!=="movie"||String(m.tmdb_id)!==id||m.animeEligible!==true||!m.mal_id)return null;
-  const titles=[m.title,m.original_title,m.mal_title,m.mal_title_english,m.mal_title_romanji,...(Array.isArray(m.titles)?m.titles:[])].filter(Boolean).map(String);
-  return{tmdbId:id,malId:String(m.mal_id),title:String(m.mal_title||m.title||""),titles:[...new Set(titles)],mediaType:"movie"};
-}
-async function tmdbMovieTitle(id){
-  const url="https://api.themoviedb.org/3/movie/"+encodeURIComponent(id)+"?api_key=68e094699525b18a70bab2f86b1fa706&language=en-US";
-  const d=await getJson(url,{headers:{"Accept":"application/json","User-Agent":UA}},5000);
-  if(!d||String(d.id)!==String(id))return null;
-  return{title:String(d.title||""),originalTitle:String(d.original_title||"")};
-}
-async function findMovie(mapping,tmdbInfo){
-  const queries=[tmdbInfo&&tmdbInfo.title,tmdbInfo&&tmdbInfo.originalTitle,mapping.title,...mapping.titles].filter(Boolean);
-  const unique=[...new Set(queries.map(x=>String(x).trim()).filter(Boolean))].slice(0,6);
-  const cards=[],seen=new Set();
-  const results=await settle(unique.map(q=>()=>search(q)),3);
-  for(const list of results)for(const c of list||[]){
-    const href=String(c.href||"").toLowerCase();
-    const pathParts=href.split(/[?#]/)[0].split("/").filter(Boolean);
-    if(!pathParts.some(part=>part==="movie"||part==="movies"))continue;
-    if(!seen.has(c.href)){seen.add(c.href);cards.push(c)}
-  }
-  const wanted=unique.map(normalizeTitle).filter(Boolean);
-  const scored=cards.map(c=>{
-    const name=normalizeTitle(c.name);
-    const score=wanted.reduce((best,t)=>Math.max(best,name===t?1000:(name.includes(t)||t.includes(name)?650:0)),0);
-    return{c,score}
-  }).filter(x=>x.score>=650).sort((a,b)=>b.score-a.score);
-  if(!scored.length)return null;
-  if(scored.length>1&&scored[0].score===scored[1].score&&normalizeTitle(scored[0].c.name)!==normalizeTitle(scored[1].c.name))return null;
-  return scored[0].c;
-}
-
 /* ---------- Anikoto search / matching ---------- */
 function normalizeTitle(s){
   let x=String(s||"").toLowerCase().replace(/&/g,"and");
@@ -885,33 +847,15 @@ async function resolveMode(episodeId,isDub,quality){
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase();
-    if(type!=="tv"&&type!=="movie")return[];
+    if(type!=="tv")return[];
     const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1;
-    if(!/^\d{1,10}$/.test(id)||Number(id)<=0)return[];
-    const key=type==="movie"?"anikoto:streams:movie:"+id+":"+JSON.stringify(settings||{}):"anikoto:streams:tv:"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
+    if(!id)return[];
+    const key="anikoto:streams:"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
     const hit=CACHE.get(key);
     if(hit!==undefined)return await Promise.resolve(hit);
     const p=(async()=>{
       const started=Date.now();
-      log("REQUEST TMDB="+id+" type="+type+" S"+s+"E"+e);
-      if(type==="movie"){
-        const [mapping,tmdbInfo]=await Promise.all([movieMapperLookup(id),tmdbMovieTitle(id)]);
-        if(!mapping||!tmdbInfo)return[];
-        const movieCard=await findMovie(mapping,tmdbInfo);
-        if(!movieCard)return[];
-        const animeUrl=absoluteUrl(movieCard.href),animeId=await getAnimeId(animeUrl);
-        if(!animeId)return[];
-        const items=await getEpisodes(animeId);
-        const titleNeedles=[normalizeTitle(tmdbInfo.title),normalizeTitle(tmdbInfo.originalTitle),...mapping.titles.map(normalizeTitle)].filter(Boolean);
-        let item=items.find(x=>x.title&&titleNeedles.includes(normalizeTitle(x.title)));
-        if(!item&&items.length===1)item=items[0];
-        if(!item)return[];
-        const modesList=modes(settings);
-        if(modesList.includes(true)&&!item.hasDub&&modesList.length===1)return[];
-        const out=(await Promise.all(modesList.map(isDub=>resolveMode(item.episodeId,isDub,qualitySetting(settings))))).flat();
-        const seen=new Set();
-        return out.filter(x=>x&&x.url&&!seen.has(x.url)&&seen.add(x.url));
-      }
+      log("REQUEST TMDB="+id+" S"+s+"E"+e);
       const mapperStarted=Date.now();
       const mapping=await mapperLookup(id,s,e);
       log("MAPPER "+(Date.now()-mapperStarted)+"ms");
