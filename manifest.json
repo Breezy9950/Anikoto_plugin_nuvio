@@ -36,6 +36,7 @@
       "version": "1.1.0",
       "author": "Nuvio Team",
       "filename": "providers/anizone-lazy.js",
+      "hasSettings": true,
       "supportedTypes": ["movie", "tv"],
       "enabled": true,
       "formats": ["m3u8"],
