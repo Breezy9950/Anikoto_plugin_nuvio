@@ -847,17 +847,20 @@ async function resolveMode(episodeId,isDub,quality){
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase();
-    if(type!=="tv")return[];
+    if(type!=="tv"&&type!=="movie")return[];
     const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1;
     if(!id)return[];
-    const key="anikoto:streams:"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
+    const isMovie=type==="movie";
+    const mapSeason=isMovie?1:s;
+    const mapEpisode=isMovie?1:e;
+    const key="anikoto:streams:"+id+":"+type+":"+s+":"+e+":"+JSON.stringify(settings||{});
     const hit=CACHE.get(key);
     if(hit!==undefined)return await Promise.resolve(hit);
     const p=(async()=>{
       const started=Date.now();
-      log("REQUEST TMDB="+id+" S"+s+"E"+e);
+      log("REQUEST TMDB="+id+" type="+type+" S"+s+"E"+e);
       const mapperStarted=Date.now();
-      const mapping=await mapperLookup(id,s,e);
+      const mapping=await mapperLookup(id,mapSeason,mapEpisode);
       log("MAPPER "+(Date.now()-mapperStarted)+"ms");
       if(!mapping){
         log("MAPPING MISS — READ ONLY, NO POPULATION");
@@ -865,7 +868,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       }
       log("MAPPING HIT MAL="+mapping.malId+" E"+mapping.malEpisode);
       const searchStarted=Date.now();
-      const anime=findAnime(mapping,s);
+      const anime=findAnime(mapping,mapSeason);
       const modesList=modes(settings);
       const [animeResult]=await Promise.all([anime]);
       log("SEARCH/MATCH TOTAL "+(Date.now()-searchStarted)+"ms");
@@ -878,6 +881,11 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       if(!animeId)return[];
       const episodes=await getEpisodes(animeId);
       let episodeMatch=episodes.find(x=>x.episodeNumber===mapping.malEpisode);
+      if(!episodeMatch&&isMovie&&episodes.length===1){
+        // Some Anikoto movie pages expose a single episode that isn't numbered 1.
+        episodeMatch=episodes[0];
+        log("MOVIE SINGLE-EPISODE FALLBACK E"+episodeMatch.episodeNumber);
+      }
       if(!episodeMatch){
         log("EPISODE MATCH FAILED MAL E"+mapping.malEpisode);
         return[]
