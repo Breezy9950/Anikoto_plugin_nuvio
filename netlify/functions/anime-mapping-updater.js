@@ -1,7 +1,7 @@
 const{getStore}=require("@netlify/blobs");
 const YAML=require("yaml");
 const STORE_NAME="anime-resolution-cache";
-const INDEX_KEY="_shinkro_index"; 
+const INDEX_KEY="_shinkro_index";
 const MANIFEST_KEY="_shinkro:manifest";
 const TVDB_PREFIX="_shinkro:tvdb:";
 const SOURCE_URL="https://raw.githubusercontent.com/shinkro/community-mapping/main/tvdb-mal.yaml";
@@ -136,10 +136,8 @@ written++;
 log(`Shared per-TVDB writes ok=${written}/${ids.length}`);
 await store.setJSON(MANIFEST_KEY,{version:2,updatedAt:index.updatedAt,count:written});
 log(`Manifest write SUCCESS ${MANIFEST_KEY}`);
-// OPTIMIZATION: Removed legacy INDEX_KEY write to save massive Blob operations. 
-// If you still need it for migration fallback, uncomment the line below.
-// await store.setJSON(INDEX_KEY,index);
-// log(`Legacy index write SUCCESS ${INDEX_KEY}`);
+await store.setJSON(INDEX_KEY,index);
+log(`Legacy index write SUCCESS ${INDEX_KEY}`);
 log(`Updater SUCCESS source=${sourceBytes}B index=${indexBytes}B perTvdb=${written} time=${Date.now()-started}ms`);
 log("========================================");
 }catch(error){
