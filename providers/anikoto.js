@@ -18,12 +18,10 @@ const AJAX_HEADERS={
 function log(x){console.log("[Anikoto] "+x)}
 
 // ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(providerName, mediaTitle, tags, size, audioList, subList) {
+function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
     const lines = [];
-    if (providerName) lines.push(providerName);
     if (mediaTitle) lines.push(mediaTitle);
-    if (tags && tags.length > 0) lines.push(tags.join(" • "));
-    if (size && size !== "0 B" && size !== "Unknown" && size !== "") lines.push(size);
+    if (seasonEpisode) lines.push(seasonEpisode);
     if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
     if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
     return lines.join("\n");
@@ -812,7 +810,7 @@ function qualitySetting(settings){
 }
 
 /* ---------- Parallel server resolution ---------- */
-async function resolveServers(servers,quality){
+async function resolveServers(servers,quality,mediaTitle,season,episode){
   const started=Date.now(),state={firstStart:started,firstStreamLogged:false};
   const tasks=servers.map(server=>async()=>{
     const serverStarted=Date.now(),link=server&&server.link_id;
@@ -829,15 +827,14 @@ async function resolveServers(servers,quality){
     log("EXTRACT "+(host||"unknown")+" "+(Date.now()-extractStarted)+"ms");
     if(!stream)return null;
     
-    // UI FORMATTING
     const isDub = server.dataType === "dub";
-    const langTag = isDub ? "DUB" : "SUB";
-    const providerName = `Anikoto [${langTag}] ${server.srv_name||"Anikoto"}`;
     const audioList = isDub ? ["English"] : ["Japanese"];
     const subList = isDub ? [] : ["English"];
+    const seasonEp = season && episode ? `Season ${season} Episode ${episode}` : "";
     
-    stream.title = buildStreamTitle(providerName, server._mediaTitle || "Anime", [langTag, "multi-quality"], "", audioList, subList);
-    stream.name = providerName;
+    stream.name = "Anikoto";
+    stream.title = buildStreamTitle(mediaTitle, seasonEp, audioList, subList);
+    stream.description = stream.title;
     stream.provider="anikoto";
     stream.type=streamType(stream.url);
     if(!state.firstStreamLogged){
@@ -850,12 +847,10 @@ async function resolveServers(servers,quality){
   log("SERVER/EXTRACTION TOTAL "+(Date.now()-started)+"ms");
   return out
 }
-async function resolveMode(episodeId,isDub,quality,mediaTitle){
+async function resolveMode(episodeId,isDub,quality,mediaTitle,season,episode){
   const servers=(await getServerList(episodeId)).filter(x=>x.dataType===(isDub?"dub":"sub"));
   if(!servers.length)return[];
-  // Inject mediaTitle into server objects for the formatter
-  servers.forEach(s => s._mediaTitle = mediaTitle);
-  const streams=await resolveServers(servers,quality);
+  const streams=await resolveServers(servers,quality,mediaTitle,season,episode);
   const out=[],seen=new Set();
   for(const s of streams){
     if(!s||!validMediaUrl(s.url)||seen.has(s.url))continue;
@@ -917,7 +912,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       }
       log("EPISODE MATCH E"+episodeMatch.episodeNumber+" ID="+episodeMatch.episodeId);
       const modeResults=await Promise.all(
-        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings),mapping.title))
+        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings),mapping.title,s,e))
       );
       const allStreams=modeResults.flat();
       const seen=new Set(),out=[];
