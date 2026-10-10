@@ -1,12 +1,12 @@
 {
   "name": "AniKoto-Nuvio",
-  "version": "1.8.0",
-  "description": "AnimeOnsen, AniZone, AniKoto, Reanime, 4KHDHub and additional direct anime streaming providers",
+  "version": "1.8.2",
+  "description": "AnimeOnsen, AniZone, AniKoto, Reanime, 4KHDHub and expanded anime streaming providers with shared subtitle support",
   "scrapers": [
     {
       "id": "animeonsen",
       "name": "AnimeOnsen",
-      "description": "AnimeOnsen DASH streams using database-first unified mapping and original scraping",
+      "description": "AnimeOnsen DASH streams using database-first unified mapping and original scraping; consumes shared subtitle tracks with provider attribution",
       "version": "1.1.0",
       "author": "Nuvio Team",
       "filename": "providers/animeonsen.js",
@@ -27,7 +27,7 @@
     {
       "id": "anikoto",
       "name": "Anikoto",
-      "description": "Anikoto streams using the existing mapping database in read-only mode with MegaPlay and VidTube extraction",
+      "description": "Anikoto streams using the existing mapping database in read-only mode with MegaPlay and VidTube extraction; consumes shared subtitle tracks with provider attribution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/anikoto.js",
@@ -49,7 +49,7 @@
     {
       "id": "anizone-lazy",
       "name": "AniZone",
-      "description": "AniZone streams with database-first unified mapping, lazy population and original scraping",
+      "description": "AniZone streams with database-first unified mapping, lazy population and original scraping; publishes verified native subtitles to shared subtitle storage and consumes shared tracks",
       "version": "1.1.0",
       "author": "Nuvio Team",
       "filename": "providers/anizone-lazy.js",
@@ -71,7 +71,7 @@
     {
       "id": "reanime",
       "name": "Reanime",
-      "description": "Reanime streams via mapper-first MAL->AniList resolution with native reanime search fallback",
+      "description": "Reanime streams via mapper-first MAL->AniList resolution with native reanime search fallback; publishes verified native subtitles to shared subtitle storage and consumes shared tracks",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/reanime.js",
@@ -92,7 +92,7 @@
     {
       "id": "4khdhub",
       "name": "4KHDHub",
-      "description": "4KHDHub direct links",
+      "description": "4KHDHub direct links; consumes shared subtitle tracks with provider attribution",
       "version": "1.0.3",
       "author": "Nuvio Team",
       "supportedTypes": [
@@ -113,7 +113,7 @@
     {
       "id": "kaa",
       "name": "Kaa",
-      "description": "Kaa.lt direct HLS provider with embedded-player extraction and subtitles",
+      "description": "Kaa.lt direct HLS provider with embedded-player extraction and subtitles; consumes shared subtitle tracks with provider attribution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/kaa.js",
@@ -131,30 +131,9 @@
       ]
     },
     {
-      "id": "animegg",
-      "name": "AnimeGG",
-      "description": "AnimeGG direct MP4/HLS mirrors with title matching and quality labels",
-      "version": "1.0.0",
-      "author": "Nuvio Team",
-      "filename": "providers/animegg.js",
-      "supportedTypes": [
-        "tv"
-      ],
-      "enabled": true,
-      "formats": [
-        "mp4",
-        "m3u8"
-      ],
-      "logo": "https://www.google.com/s2/favicons?domain=animegg.org&sz=128",
-      "contentLanguage": [
-        "en",
-        "ja"
-      ]
-    },
-    {
       "id": "megavid",
       "name": "MegaVid",
-      "description": "MegaVid/Vidy direct HLS/MP4 resolver with AniList and MAL identifier fallback",
+      "description": "MegaVid/Vidy direct HLS/MP4 resolver with AniList and MAL identifier fallback; consumes shared subtitle tracks with provider attribution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/megavid.js",
@@ -175,7 +154,7 @@
     {
       "id": "vidnest",
       "name": "VidNest",
-      "description": "VidNest direct HLS resolver with subtitle track extraction",
+      "description": "VidNest direct HLS resolver with subtitle track extraction; publishes verified native subtitles to shared subtitle storage and consumes shared tracks",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/vidnest.js",
@@ -195,7 +174,7 @@
     {
       "id": "nin",
       "name": "NiN",
-      "description": "Supaplay/NiN direct HLS resolver with dual API path fallback",
+      "description": "Supaplay/NiN direct HLS resolver with dual API path fallback; consumes shared subtitle tracks with provider attribution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/nin.js",
@@ -215,7 +194,7 @@
     {
       "id": "zoko",
       "name": "Zoko",
-      "description": "ZokoAnime HLS resolver with in-page payload decoding and subtitles",
+      "description": "ZokoAnime HLS resolver with in-page payload decoding and subtitles; consumes shared subtitle tracks with provider attribution",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/zoko.js",
@@ -235,7 +214,7 @@
     {
       "id": "lee",
       "name": "Lee",
-      "description": "ani.pm direct HLS/MP4 resolver with sub/dub availability and subtitle extraction",
+      "description": "ani.pm direct HLS/MP4 resolver with sub/dub availability and subtitle extraction; publishes verified native subtitles to shared subtitle storage and consumes shared tracks",
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/lee.js",
