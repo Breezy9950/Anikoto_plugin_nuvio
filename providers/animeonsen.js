@@ -1,5 +1,6 @@
 const API="https://api.animeonsen.xyz/v4",AUTH="https://auth.animeonsen.xyz/oauth/token",CDN="https://cdn.animeonsen.xyz",SITE="https://www.animeonsen.xyz",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
 const CLIENT_ID="f296be26-28b5-4358-b5a1-6259575e23b7",CLIENT_SECRET="349038c4157d0480784753841217270c3c5b35f4281eaee029de21cb04084235";
+const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 let token=null,tokenExpiration=0,tokenPromise=null;
 function log(x){console.log("[AnimeOnsen] "+x)}
 
@@ -23,6 +24,15 @@ async function _settle(tasks,ms=4500){const r=await Promise.allSettled(tasks.map
 
 async function req(url,opt){opt=opt||{};const c=new AbortController(),t=setTimeout(()=>c.abort(),15000);try{return await fetch(url,Object.assign({},opt,{signal:c.signal}))}finally{clearTimeout(t)}}
 async function json(url,opt){try{const r=await req(url,opt);if(!r.ok){log("HTTP "+r.status+" "+url);return null}return await r.json()}catch(e){log("Request failed "+url+": "+e.message);return null}}
+
+// ---------- TMDB TITLE FETCHER ----------
+async function getTmdbTitle(tmdbId, mediaType) {
+  const type = mediaType === "movie" ? "movie" : "tv";
+  const url = "https://api.themoviedb.org/3/" + type + "/" + encodeURIComponent(tmdbId) + "?api_key=" + TMDB_API_KEY + "&language=en-US";
+  const d = await json(url, {headers: {"Accept": "application/json"}}, 3500);
+  return d ? (d.name || d.title || d.original_name || d.original_title || "") : "";
+}
+
 async function getToken(){const now=Math.floor(Date.now()/1000);if(token&&tokenExpiration>now+3600)return token;if(tokenPromise)return tokenPromise;tokenPromise=(async()=>{const body={client_id:CLIENT_ID,client_secret:CLIENT_SECRET,grant_type:"client_credentials"},r=await req(AUTH,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json","User-Agent":UA},body:JSON.stringify(body)});if(!r.ok)throw new Error("AnimeOnsen token HTTP "+r.status);const d=await r.json();if(!d.access_token)throw new Error("AnimeOnsen token missing");token=d.access_token;tokenExpiration=now+Number(d.expires_in||3600);log("OAuth token refreshed");return token})().finally(()=>{tokenPromise=null});return tokenPromise}
 async function api(path,retry=true){const t=await getToken(),d=await json(API+path,{headers:{"Authorization":"Bearer "+t,"Accept":"application/json","User-Agent":UA}},4500);if(!d&&retry){token=null;tokenExpiration=0;try{await getToken();return api(path,false)}catch(e){}}return d}
 async function mapping(tmdbId,season,episode){const key="animeonsen:mapping:"+tmdbId+":"+season+":"+episode;const value=await _memo(key,86400000,async()=>{const u=MAPPING_URL+"?tmdbId="+encodeURIComponent(tmdbId)+"&season="+encodeURIComponent(season)+"&episode="+encodeURIComponent(episode)+"&pending=1",d=await json(u,{headers:{"Accept":"application/json","User-Agent":UA}},7000);if(!d||!d.ok||!d.mapping)return null;const m=d.mapping,mal=String(m.mal_id||m.malId||"").trim(),ep=Number(m.mal_episode||m.target_episode||0);if(!mal||!ep)return null;return{malId:mal,malEpisode:ep,title:String(m.anime_title||"").trim(),titles:Array.isArray(m.titles)?m.titles.filter(Boolean).map(String):[]}});if(!value)_NUVIO_CACHE.delete(key);return value}
@@ -33,8 +43,10 @@ async function findAnime(m){const queries=uniq([m.title,...m.titles]);if(!querie
 async function getEpisodes(alias){return _memo("animeonsen:episodes:"+alias,3600000,async()=>{const d=await api("/content/"+encodeURIComponent(alias)+"/episodes");if(!d||typeof d!=="object")return[];const out=[];for(const k of Object.keys(d)){const n=Number(k);if(!Number.isInteger(n)||n<1)continue;const x=d[k]||{};out.push({episodeNumber:n,episodeTitle:x.contentTitle_episode_en||null,episodeLink:n+"+"+alias})}return out.sort((a,b)=>a.episodeNumber-b.episodeNumber)})}
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1,key="animeonsen:resolved:"+id+":"+s+":"+e;if(_cacheGet(key)!==undefined)return _cacheGet(key);const p=(async()=>{const m=await mapping(id,s,e);if(!m){log("No mapping for TMDB="+id+" S"+s+"E"+e);return[]}const anime=await findAnime(m);if(!anime){log("AnimeOnsen search failed for "+m.title);return[]}log("Matched "+anime.name+" -> "+anime.alias);const eps=await getEpisodes(anime.alias),ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("Episode "+m.malEpisode+" not found for "+anime.name);return[]}const n=ep.episodeNumber,url=CDN+"/video/mp4-dash/"+encodeURIComponent(anime.alias)+"/"+encodeURIComponent(n)+"/manifest.mpd",subtitle=API+"/subtitles/"+encodeURIComponent(anime.alias)+"/en-US/"+encodeURIComponent(n),headers={"Referer":SITE+"/","User-Agent":UA};
       
+      const tmdbTitle = await getTmdbTitle(id, mediaType);
+      const displayTitle = tmdbTitle || m.title || "Anime";
       const seasonEp = `Season ${s} Episode ${e}`;
-      const streamTitle = buildStreamTitle(m.title || "Anime", seasonEp, ["Japanese"], ["English"]);
+      const streamTitle = buildStreamTitle(displayTitle, seasonEp, ["Japanese"], ["English"]);
       
       return[{name:"AnimeOnsen",title:streamTitle,description:streamTitle,url,headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
 module.exports={getStreams};
