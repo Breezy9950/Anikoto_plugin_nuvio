@@ -310,6 +310,14 @@ async function getTmdbInfo(tmdbId,mediaType,season=1,episode=1){
   }
 }
 
+async function dbMovieMapping(tmdbId){
+  const id=String(tmdbId||"").trim();
+  if(!/^\\d{1,10}$/.test(id)||Number(id)<=0)return null;
+  const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(id)+"&tmdbId="+encodeURIComponent(id)+"&mediaType=movie&pending=1";
+  const d=await json(u,{headers:{"Accept":"application/json"}},5000);
+  if(d&&d.eligibility==="non_anime")return{media_type:"movie",tmdb_id:id,eligibility_status:"confirmed_non_anime",animeEligible:false};
+  return d&&d.ok&&d.mapping&&d.mapping.media_type==="movie"&&String(d.mapping.tmdb_id)===id?d.mapping:null;
+}
 async function dbMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
   season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
@@ -424,12 +432,30 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
 
 
   }else{
+    if(!/^\\d{1,10}$/.test(tmdbId)||Number(tmdbId)<=0){
+      console.log("[AniZone Lazy] INVALID MOVIE TMDB ID",tmdbId);
+      return[]
+    }
+    const existingMovie=await dbMovieMapping(tmdbId);
+    if(existingMovie&&existingMovie.eligibility_status==="confirmed_non_anime")return[];
+    if(existingMovie){
+      title=String(existingMovie.title||existingMovie.original_title||existingMovie.mal_title||"").trim();
+      if(existingMovie.mal_title&&normalize(existingMovie.mal_title)!==normalize(title))altTitles.push(existingMovie.mal_title);
+      targetTitles=mapTitles(existingMovie);
+    }
     const info=await getTmdbInfo(tmdbId,"movie");
     if(!info||!info.title){
       console.log("[AniZone Lazy] MOVIE TMDB LOOKUP FAILED",tmdbId);
       return[]
     }
-    title=info.title;
+    if(!existingMovie){
+      const autoPopulate=!["false","0","disabled","off"].includes(String(getSetting(settings,["autoPopulateMissingMappings","auto_populate_missing_mappings","autoPopulate","autoPopulateMappings"],"enabled")).toLowerCase());
+      if(autoPopulate){
+        const triggerUrl=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&mediaType=movie&operation=movie-franchise&populate=1&trigger=anizone-lazy";
+        json(triggerUrl,{headers:{"Accept":"application/json"}},5000).catch(()=>{});
+      }else console.log("[AniZone Lazy] MOVIE AUTO POPULATION DISABLED — READ ONLY");
+    }
+    if(!title)title=info.title;
     if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
   }
 
