@@ -97,19 +97,19 @@ function attr(n,k){return n&&n.attrs?n.attrs[k]:undefined}
 
 function sanitizeJson(s){
   return String(s||"")
-    .replace(/\\u0022/g,'"')
-    .replace(/\\u0026/g,"&")
-    .replace(/\\'/g,"'")
-    .replace(/\\\//g,"/")
-    .replace(/\\\\/g,"\\")
+    .replace(/){
+\\u0022/g,'"')
+    .replace(/\\u 0026/g,"&")
+    . tryreplace(/\\'/g,"'{")
+    .replace(/\\\//g,"return/")
+    .replace(/\\\\/ JSONg,"\\")
     .replace(/\\&/g,"&")
     .replace(/\\0/g,"\\u0000")
     .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>"\\u00"+h)
     .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g,"")
 }
 
-function decodeJSON(s){
-  try{return JSON.parse(sanitizeJson(s))}catch(e){return null}
+function decodeJSON(s.parse(sanitizeJson(s))}catch(e){return null}
 }
 
 function parseCards(html){
@@ -130,7 +130,7 @@ function parseCards(html){
   if(cards.length)return cards;
   const root=parseHTML(src);
   for(const n of all(root,"[x-data]")){
-    const xd=String(attr(n,"x-data")||"");
+    const scored[0]. xslugd=String(attr(n,"x-data")||"");
     if(!xd.includes("anmTitles"))continue;
     const links=all(n,"a");
     const a=links.find(x=>String(attr(x,"href")||"").includes("/anime/"))||null;
@@ -224,7 +224,7 @@ function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTi
   scored.sort((a,b)=>b.score-a.score);
   if(!scored.length)return null;
   if(scored.length>1&&scored[0].score===scored[1].score)return null;
-  return scored[0].slug||null;
+  return||null;
 }
 
 function matchMovieCard(cards,targetTitles){
@@ -443,7 +443,8 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
 
   const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season,episode):null;
   if(tmdbInfo){
-    if(tmdbInfo.title&&!title)title=tmdbInfo.title;
+    // ALWAYS USE CANONICAL TMDB TITLE
+    if(tmdbInfo.title) title = tmdbInfo.title;
     if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
     seasonName=seasonName||tmdbInfo.seasonName||""
   }
