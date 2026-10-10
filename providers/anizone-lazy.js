@@ -1,5 +1,15 @@
 const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
 
+// ---------- UI FORMATTING HELPER ----------
+function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
+    const lines = [];
+    if (mediaTitle) lines.push(mediaTitle);
+    if (seasonEpisode) lines.push(seasonEpisode);
+    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
+    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
+    return lines.join("\n");
+}
+
 async function req(url,opt={},timeout=TIMEOUT){
   const o={...opt,headers:{...HEADERS,...(opt.headers||{})}};
   if(typeof AbortController!=="function"||typeof setTimeout!=="function")return fetch(url,o).catch(()=>null);
@@ -204,8 +214,6 @@ function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTi
     let identity=0,seasonEvidence=0;
     for(const n of titles){
       if(targets.includes(n))identity=Math.max(identity,100);
-      // Allow a provider's season-qualified title only when the mapped canonical title
-      // is a complete title component, not an arbitrary substring.
       if(targets.some(t=>n===t+" "+sn||n===sn+" "+t))identity=Math.max(identity,120);
       if(base&&(n===base||n.startsWith(base+" ")||n.endsWith(" "+base)))identity=Math.max(identity,75);
       if(sn&&sn!=="season "+seasonNo&&(n===sn||n.endsWith(" "+sn)||n.includes(" "+sn+" ")))seasonEvidence=Math.max(seasonEvidence,15);
@@ -493,11 +501,16 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
 
   if(parsed.masterUrl){
     seen.add(parsed.masterUrl);
+    const isDub = defaultFormat.toLowerCase().includes("dub") || defaultFormat.toLowerCase().includes("english");
+    const audioList = isDub ? ["English"] : ["Japanese"];
+    const subList = isDub ? [] : ["English"];
+    const seasonEp = movie ? "Movie" : `Season ${season} Episode ${episode}`;
+    
     streams.push({
       name:"AniZone",
-      title:title+" - Episode "+malEpisode+" ["+defaultServerName+" - "+defaultFormat+"]",
+      title: buildStreamTitle(title, seasonEp, audioList, subList),
+      description: buildStreamTitle(title, seasonEp, audioList, subList),
       url:parsed.masterUrl,
-      quality:"Multi",
       headers:HEADERS,
       subtitles:parsed.subtitles||[]
     })
@@ -574,13 +587,18 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
             const p=parseVidstack(html);
             if(!p.masterUrl||seen.has(p.masterUrl))return null;
 
+            const isDub = format.toLowerCase().includes("dub") || format.toLowerCase().includes("english");
+            const audioList = isDub ? ["English"] : ["Japanese"];
+            const subList = isDub ? [] : ["English"];
+            const seasonEp = movie ? "Movie" : `Season ${season} Episode ${episode}`;
+
             return{
               url:p.masterUrl,
               stream:{
                 name:"AniZone",
-                title:title+" - Episode "+malEpisode+" ["+serverName+" - "+format+"]",
+                title: buildStreamTitle(title, seasonEp, audioList, subList),
+                description: buildStreamTitle(title, seasonEp, audioList, subList),
                 url:p.masterUrl,
-                quality:"Multi",
                 headers:HEADERS,
                 subtitles:p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles||[]
               }
