@@ -1,4 +1,4 @@
-const{populateIfNeeded}=require("./anime-lazy-mapping.js");
+const{populateIfNeeded,populateMovieFranchise}=require("./anime-lazy-mapping.js");
 function log(x){console.log(`[ANIME LAZY BG] ${x}`)}
 function body(event){try{return JSON.parse(event&&event.body||"{}")}catch(e){return null}}
 const POPULATE_DEADLINE_MS=90000;
@@ -13,8 +13,21 @@ return{statusCode:403,body:JSON.stringify({ok:false,error:"Forbidden"})}
 const seed=body(event);
 if(!seed){log("INVALID JSON BODY");return{statusCode:400,body:JSON.stringify({ok:false,error:"Invalid JSON body"})}}
 try{
-const id=String(seed.tmdb_id||"").trim(),season=Number(seed.season),episode=Number(seed.episode),malEpisode=seed.mal_episode==null?null:Number(seed.mal_episode);
-if(!/^\d+$/.test(id)||id.length>50||!Number.isInteger(season)||season<0||!Number.isInteger(episode)||episode<1||episode>100000||(malEpisode!==null&&(!Number.isInteger(malEpisode)||malEpisode<1||malEpisode>100000))){
+const id=String(seed.tmdb_id||"").trim(),mediaType=String(seed.media_type||"tv").toLowerCase();
+if(!/^\\d{1,10}$/.test(id)||Number(id)<=0||id.length>50)return{statusCode:400,body:JSON.stringify({ok:false,error:"Invalid TMDB ID"})};
+if(mediaType==="movie"){
+ if(seed.operation!=="movie-franchise")return{statusCode:400,body:JSON.stringify({ok:false,error:"Invalid movie operation"})};
+ log(`START MOVIE FRANCHISE TMDB=${id}`);
+ try{
+  const result=await populateMovieFranchise(id);
+  return{statusCode:200,body:JSON.stringify({ok:true,result})}
+ }catch(error){
+  console.error("[ANIME LAZY BG] MOVIE FAILED",error&&error.stack||error);
+  return{statusCode:500,body:JSON.stringify({ok:false,error:error&&error.message||"Movie population failed"})}
+ }
+}
+const season=Number(seed.season),episode=Number(seed.episode),malEpisode=seed.mal_episode==null?null:Number(seed.mal_episode);
+if(mediaType!=="tv"||!Number.isInteger(season)||season<0||!Number.isInteger(episode)||episode<1||episode>100000||(malEpisode!==null&&(!Number.isInteger(malEpisode)||malEpisode<1||malEpisode>100000))){
 log(`INVALID SEED TMDB=${id||"?"} S${seed.season??"?"}E${seed.episode??"?"}`);
 return{statusCode:400,body:JSON.stringify({ok:false,error:"Invalid population seed"})}
 }

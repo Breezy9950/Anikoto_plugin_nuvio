@@ -78,16 +78,10 @@ async function mergeSharedCandidates(store,id,shinkroCandidates){
 const lockKey=`_shared_mapping_lock:${id}`,now=Date.now();
 for(let attempt=0;attempt<10;attempt++){
 const old=await store.get(lockKey,{type:"json",consistency:"eventual"}).catch(()=>null);
-if(old&&Number(old.expiresAt)>Date.now()){
-await new Promise(r=>setTimeout(r,50*Math.pow(2,attempt)));
-continue;
-}
+if(old&&Number(old.expiresAt)>Date.now()){await new Promise(r=>setTimeout(r,100));continue}
 if(old)await store.delete(lockKey).catch(()=>{});
 const lock=await store.setJSON(lockKey,{startedAt:Date.now(),expiresAt:Date.now()+WRITE_LOCK_TTL},{onlyIfNew:true}).catch(()=>null);
-if(!lock||!lock.modified){
-await new Promise(r=>setTimeout(r,50*Math.pow(2,attempt)));
-continue;
-}
+if(!lock||!lock.modified){await new Promise(r=>setTimeout(r,100));continue}
 try{
 const existing=await readExistingCandidates(store,id),lazy=existing.filter(x=>x.source==="lazy"),shinkro=shinkroCandidates.map(normalizeCandidate).filter(Boolean);
 const merged=shinkro.concat(lazy.filter(l=>!shinkro.some(s=>sameCandidate(s,l))));

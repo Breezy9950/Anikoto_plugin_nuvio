@@ -1,29 +1,12 @@
 const{getStore}=require("@netlify/blobs");
-const STORE="anime-resolution-cache",LEGACY_LAZY_STORE="anime-lazy-resolution",TVDB_PREFIX="_shinkro:tvdb:",INDEX_KEY="_shinkro_index",MANIFEST_KEY="_shinkro:manifest",TMDB_TVDB_PREFIX="_tmdb_tvdb_",MAX_ID=50,MAX_EP=100000,MAX_WINDOW=12,LOCK_TTL=2*60*1000,TIMEOUT=4000,CONCURRENCY=4,TMDB_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706";
+const STORE="anime-resolution-cache",LEGACY_LAZY_STORE="anime-lazy-resolution",TVDB_PREFIX="_shinkro:tvdb:",INDEX_KEY="_shinkro_index",MANIFEST_KEY="_shinkro:manifest",TMDB_TVDB_PREFIX="_tmdb_tvdb_",MAX_ID=50,MAX_EP=100000,MAX_WINDOW=12,LOCK_TTL=2*60*1000,TIMEOUT=6000,CONCURRENCY=4,TMDB_KEY=process.env.TMDB_API_KEY||"68e094699525b18a70bab2f86b1fa706";
 const MAX_MAPPING_WAIT=4500,MAPPING_POLL_MS=300;
-
 function log(x){console.log(`[ANIME LAZY MAPPING] ${x}`)}
 function json(status,body){return{statusCode:status,headers:{"Content-Type":"application/json","Cache-Control":"no-store","Access-Control-Allow-Origin":"*","Access-Control-Allow-Methods":"GET,OPTIONS","Access-Control-Allow-Headers":"Content-Type"},body:JSON.stringify(body)}}
 function num(v,max=MAX_EP){const n=Number(v);return Number.isInteger(n)&&n>=0&&n<=max?n:null}
 function pos(v){const n=num(v);return n&&n>0?n:null}
 function db(){return getStore({name:STORE,siteID:process.env.NETLIFY_SITE_ID,token:process.env.NETLIFY_AUTH_TOKEN})}
 function legacyDb(){return getStore({name:LEGACY_LAZY_STORE,siteID:process.env.NETLIFY_SITE_ID,token:process.env.NETLIFY_AUTH_TOKEN})}
-
-async function limitConcurrency(tasks, limit) {
-  const results = [];
-  const executing = [];
-  for (const task of tasks) {
-    const p = Promise.resolve().then(() => task());
-    results.push(p);
-    if (limit <= tasks.length) {
-      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
-      executing.push(e);
-      if (executing.length >= limit) await Promise.race(executing);
-    }
-  }
-  return Promise.all(results);
-}
-
 async function fetchJson(url,timeout=TIMEOUT){const c=new AbortController(),t=setTimeout(()=>c.abort(),timeout);try{const r=await fetch(url,{headers:{Accept:"application/json","User-Agent":"Anikoto-Nuvio-Lazy/1.0"},signal:c.signal});if(!r.ok){log(`HTTP ${r.status} ${url.split("?")[0]}`);return{state:r.status===429?"RATE_LIMITED":"HTTP_ERROR",data:null}}try{return{state:"HIT",data:await r.json()}}catch(e){return{state:"MALFORMED",data:null}}}catch(e){const m=String(e&&e.message||e);return{state:/abort|timeout/i.test(m)?"TIMEOUT":"UNKNOWN",data:null}}finally{clearTimeout(t)}}
 function day(v){const s=v?String(v).split("T")[0]:"";return/^\d{4}-\d\d-\d\d$/.test(s)?s:""}
 function dateMatch(a,b){a=day(a);b=day(b);if(!a||!b)return false;return Math.abs(new Date(a+"T00:00:00Z")-new Date(b+"T00:00:00Z"))<=2*86400000}
@@ -31,22 +14,22 @@ function uniq(a){return[...new Set((a||[]).filter(Boolean).map(String))]}
 function titles(a){return uniq(a).slice(0,50)}
 function normTitle(v){const s=String(v||"").toLowerCase();try{return s.normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"")}catch(e){return s.replace(/[^a-z0-9]/g,"")}}
 function titleMatch(a,b){a=normTitle(a);b=normTitle(b);return!!a&&!!b&&(a===b||a.includes(b)||b.includes(a))}
-async function tmdb(id,path=""){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}${path}${path.includes("?")?"&":"?"}api_key=${encodeURIComponent(TMDB_KEY)}`,4000)).data}
-async function external(id){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,4000)).data}
-async function tmdbSeason(id,s){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(s)}?api_key=${encodeURIComponent(TMDB_KEY)}`,4000)).data}
-async function tmdbEpisode(id,s,e){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(s)}/episode/${encodeURIComponent(e)}?api_key=${encodeURIComponent(TMDB_KEY)}`,4000)).data}
-async function tmdbEpisodeExternal(id,s,e){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(s)}/episode/${encodeURIComponent(e)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,4000)).data}
-async function arm(id,imdb,tvdb){const urls=[imdb&&`https://arm.haglund.dev/api/v2/imdb?id=${encodeURIComponent(imdb)}`,id&&`https://arm.haglund.dev/api/v2/themoviedb?id=${encodeURIComponent(id)}`,tvdb&&`https://arm.haglund.dev/api/v2/thetvdb?id=${encodeURIComponent(tvdb)}`].filter(Boolean);const rs=await Promise.all(urls.map(u=>fetchJson(u,3500)));const ids=[],states=[];for(const r of rs){states.push(r.state);if(r.state==="HIT"&&Array.isArray(r.data))for(const x of r.data)if(x&&x.myanimelist)ids.push(String(x.myanimelist))}return{ids:uniq(ids),states}}
-async function aniTmdb(id,imdb){return(await fetchJson(id?`https://api.ani.zip/mappings?themoviedb_id=${encodeURIComponent(id)}`:`https://api.ani.zip/mappings?imdb_id=${encodeURIComponent(imdb)}`,3500)).data}
-async function aniTvdb(id){return(await fetchJson(`https://api.ani.zip/mappings?thetvdb_id=${encodeURIComponent(id)}`,3500)).data}
-async function aniMal(mal){return(await fetchJson(`https://api.ani.zip/mappings?mal_id=${encodeURIComponent(mal)}`,3500)).data}
-async function jikan(mal){return(await fetchJson(`https://api.jikan.moe/v4/anime/${encodeURIComponent(mal)}`,3500)).data}
+async function tmdb(id,path=""){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}${path}${path.includes("?")?"&":"?"}api_key=${encodeURIComponent(TMDB_KEY)}`,7000)).data}
+async function external(id){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,7000)).data}
+async function tmdbSeason(id,s){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(s)}?api_key=${encodeURIComponent(TMDB_KEY)}`,7000)).data}
+async function tmdbEpisode(id,s,e){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(s)}/episode/${encodeURIComponent(e)}?api_key=${encodeURIComponent(TMDB_KEY)}`,7000)).data}
+async function tmdbEpisodeExternal(id,s,e){return(await fetchJson(`https://api.themoviedb.org/3/tv/${encodeURIComponent(id)}/season/${encodeURIComponent(s)}/episode/${encodeURIComponent(e)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,7000)).data}
+async function arm(id,imdb,tvdb){const urls=[imdb&&`https://arm.haglund.dev/api/v2/imdb?id=${encodeURIComponent(imdb)}`,id&&`https://arm.haglund.dev/api/v2/themoviedb?id=${encodeURIComponent(id)}`,tvdb&&`https://arm.haglund.dev/api/v2/thetvdb?id=${encodeURIComponent(tvdb)}`].filter(Boolean);const rs=await Promise.all(urls.map(u=>fetchJson(u,5000)));const ids=[],states=[];for(const r of rs){states.push(r.state);if(r.state==="HIT"&&Array.isArray(r.data))for(const x of r.data)if(x&&x.myanimelist)ids.push(String(x.myanimelist))}return{ids:uniq(ids),states}}
+async function aniTmdb(id,imdb){return(await fetchJson(id?`https://api.ani.zip/mappings?themoviedb_id=${encodeURIComponent(id)}`:`https://api.ani.zip/mappings?imdb_id=${encodeURIComponent(imdb)}`,5000)).data}
+async function aniTvdb(id){return(await fetchJson(`https://api.ani.zip/mappings?thetvdb_id=${encodeURIComponent(id)}`,5000)).data}
+async function aniMal(mal){return(await fetchJson(`https://api.ani.zip/mappings?mal_id=${encodeURIComponent(mal)}`,5000)).data}
+async function jikan(mal){return(await fetchJson(`https://api.jikan.moe/v4/anime/${encodeURIComponent(mal)}`,5000)).data}
 function aniIds(x){return x&&x.mappings&&x.mappings.mal_id?[String(x.mappings.mal_id)]:[]}
 function malTitleData(ani,j){const d=j&&j.data||{},raw=ani&&ani.titles&&typeof ani.titles==="object"?Object.values(ani.titles).filter(Boolean):[],english=d.title_english||null,romanji=d.title||null;return{english,romanji,all:titles([...raw,english,romanji,d.title_japanese])}}
 function episodeInfo(x){if(!x)return null;return{tvdb_season:Number(x.seasonNumber),tvdb_episode:Number(x.episodeNumber),tvdb_episode_id:x.tvdbEid||x.tvdbId||null,absolute:x.absoluteEpisodeNumber!=null?Number(x.absoluteEpisodeNumber):null,air_date:day(x.airDateUtc||x.airDate||x.airdate),title:(x.title&&(x.title.en||x.title["x-jat"]||x.title.x))||""}}
 function aniEpisodeList(ani){const out=[];for(const x of Object.values(ani&&ani.episodes||{})){const e=episodeInfo(x);if(e&&Number.isInteger(e.tvdb_season)&&Number.isInteger(e.tvdb_episode)&&e.tvdb_season>=0&&e.tvdb_episode>0)out.push(e)}return out}
 function cinemetaEpisodeInfo(x){if(!x)return null;const season=Number(x.season),episode=Number(x.episode);if(!Number.isInteger(season)||!Number.isInteger(episode)||season<0||episode<=0)return null;return{tmdb_season:season,tmdb_episode:episode,tmdb_episode_id:x.id||x.video_id||null,air_date:day(x.released||x.air_date||x.release_date),title:x.title||x.name||""}}
-async function cinemetaEpisodes(imdb){if(!imdb)return[];const urls=[`https://v3-cinemeta.strem.io/meta/series/${encodeURIComponent(imdb)}.json`,`https://cinemeta-live.strem.io/meta/series/${encodeURIComponent(imdb)}.json`];for(const url of urls){try{const r=await fetchJson(url,4000),m=r.data&&r.data.meta;if(m&&Array.isArray(m.videos)){const out=m.videos.map(cinemetaEpisodeInfo).filter(Boolean);if(out.length)return out}}catch(e){}}return[]}
+async function cinemetaEpisodes(imdb){if(!imdb)return[];const urls=[`https://v3-cinemeta.strem.io/meta/series/${encodeURIComponent(imdb)}.json`,`https://cinemeta-live.strem.io/meta/series/${encodeURIComponent(imdb)}.json`];for(const url of urls){try{const r=await fetchJson(url,6000),m=r.data&&r.data.meta;if(m&&Array.isArray(m.videos)){const out=m.videos.map(cinemetaEpisodeInfo).filter(Boolean);if(out.length)return out}}catch(e){}}return[]}
 async function eligibility(id,old,ext){
 if(old&&old.animeEligible===true&&old.mal_id)return{ok:true,mal:old.mal_id,imdb:old.imdb_id||ext&&ext.imdb_id||null,source:"stored"};
 if(old&&old.animeEligible===false&&old.animeEligibilityReason==="NO_ANIME_SOURCE")return{ok:false,temporary:false,imdb:old.imdb_id||ext&&ext.imdb_id||null,source:"NO_ANIME_SOURCE"};
@@ -58,10 +41,7 @@ if(azIds.length)candidates.push(...azIds);else states.push("MISS");
 if(ar.ids.length){states.push("SKIPPED_ARM_HIT");log(`ELIGIBILITY MAL=HIT ARM=HIT JIKAN=SKIPPED -> ANIME CONFIRMED`);return{ok:true,mal:ar.ids[0],imdb,source:"ARM"}}
 let mal=null,jikanState="MISS";
 const jikCands=uniq(candidates).slice(0,3);
-if(jikCands.length){
-const rs=await limitConcurrency(jikCands.map(m=>async()=>jikan(m)),2);
-for(const r of rs){if(r&&r.data&&r.data.mal_id){mal=String(r.data.mal_id);jikanState="HIT";break}if(r===null)jikanState="HTTP_ERROR"}
-}
+if(jikCands.length){const rs=await Promise.allSettled(jikCands.map(m=>jikan(m)));for(const r of rs){if(r.status==="fulfilled"&&r.value&&r.value.data&&r.value.data.mal_id){mal=String(r.value.data.mal_id);jikanState="HIT";break}if(r.status==="fulfilled"&&r.value===null)jikanState="HTTP_ERROR"}}
 states.push(jikanState);
 if(mal){log(`ELIGIBILITY MAL=HIT ARM=MISS JIKAN=HIT -> ANIME CONFIRMED`);return{ok:true,mal,imdb,source:"JIKAN"}}
 const genuine=states.filter(x=>x==="MISS").length===states.length;
@@ -124,7 +104,7 @@ const cached=await store.get(key,{type:"json",consistency:"eventual"});
 if(cached&&cached.updatedAt&&Date.now()-Number(cached.updatedAt)<7*24*60*60*1000)return cached.tvdbId?String(cached.tvdbId):null
 }catch(error){log(`TMDB cache read failed: ${error.message}`)}
 try{
-const url=`https://api.themoviedb.org/3/tv/${encodeURIComponent(tmdbId)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,response=await fetchJson(url,4000),data=response.data;
+const url=`https://api.themoviedb.org/3/tv/${encodeURIComponent(tmdbId)}/external_ids?api_key=${encodeURIComponent(TMDB_KEY)}`,response=await fetchJson(url,7000),data=response.data;
 if(!data)return null;
 const tvdbId=data&&data.tvdb_id?String(data.tvdb_id):null;
 try{await store.setJSON(key,{tvdbId,updatedAt:Date.now()})}catch(error){log(`TMDB cache write failed: ${error.message}`)}
@@ -141,7 +121,7 @@ try{
 const index=await store.get(INDEX_KEY,{type:"json",consistency:"eventual"});
 if(index&&index.byTvdb&&Array.isArray(index.byTvdb[tvdbId]))return{candidates:index.byTvdb[tvdbId],source:"legacy-index"}
 }catch(error){log(`LEGACY INDEX READ FAILED TVDB=${tvdbId} ${error.message}`)}
-return{candidates:null,source:"none"};
+return{candidates:null,source:"none"}
 }
 function mappingFromCandidate(id,tvdbId,season,episode,selected){
 const c=selected&&selected.candidate,m=selected&&selected.targetEpisode;
@@ -281,16 +261,10 @@ if(!tvdbId||!added||!Object.keys(added).length)return false;
 const st=db(),lockKey=`_shared_mapping_lock:${tvdbId}`;
 for(let attempt=0;attempt<10;attempt++){
 const oldLock=await st.get(lockKey,{type:"json",consistency:"eventual"}).catch(()=>null);
-if(oldLock&&Number(oldLock.expiresAt)>Date.now()){
-await new Promise(r=>setTimeout(r,50*Math.pow(2,attempt)));
-continue;
-}
+if(oldLock&&Number(oldLock.expiresAt)>Date.now()){await new Promise(r=>setTimeout(r,100));continue}
 if(oldLock)await st.delete(lockKey).catch(()=>{});
 const lock=await st.setJSON(lockKey,{startedAt:Date.now(),expiresAt:Date.now()+30_000},{onlyIfNew:true}).catch(()=>null);
-if(!lock||!lock.modified){
-await new Promise(r=>setTimeout(r,50*Math.pow(2,attempt)));
-continue;
-}
+if(!lock||!lock.modified){await new Promise(r=>setTimeout(r,100));continue}
 try{
 const loaded=await loadSharedCandidates(st,String(tvdbId)),list=Array.isArray(loaded.candidates)?loaded.candidates.map(x=>x):[];
 let changed=false;
@@ -376,87 +350,85 @@ return Object.values(ani&&ani.episodes||{}).map(x=>({episode:Number(x.episode),t
 }
 async function buildMalCache(malIds){
 const cache=new Map();
-const tasks = malIds.slice(0,8).map(mal => async () => {
-  try {
-    const ani = await aniMal(mal);
-    cache.set(String(mal), {episodes: parseMalEpisodes(ani), ani});
-  } catch(e) {
-    cache.set(String(mal), {episodes: [], ani: null});
-  }
-});
-await limitConcurrency(tasks, 3);
-return cache;
+await Promise.all(malIds.slice(0,8).map(async mal=>{
+try{
+const ani=await aniMal(mal);
+cache.set(String(mal),{episodes:parseMalEpisodes(ani),ani})
+}catch(e){cache.set(String(mal),{episodes:[],ani:null})}
+}));
+return cache
 }
 async function buildTitleCache(malIds,malCache){
 const cache=new Map();
-const tasks = malIds.slice(0,8).map(mal => async () => {
-  try {
-    const entry = malCache.get(String(mal)) || {episodes: [], ani: null};
-    const jd = await jikan(mal);
-    cache.set(String(mal), malTitleData(entry.ani, jd));
-  } catch(e) {
-    try {
-      const jd = await jikan(mal);
-      cache.set(String(mal), malTitleData(null, jd));
-    } catch(_) {
-      cache.set(String(mal), {english: null, romanji: null, all: []});
-    }
-  }
-});
-await limitConcurrency(tasks, 2);
-return cache;
+await Promise.all(malIds.slice(0,8).map(async mal=>{
+try{
+const entry=malCache.get(String(mal))||{episodes:[],ani:null},jd=await jikan(mal);
+cache.set(String(mal),malTitleData(entry.ani,jd))
+}catch(e){
+try{
+const jd=await jikan(mal);
+cache.set(String(mal),malTitleData(null,jd))
+}catch(_){cache.set(String(mal),{english:null,romanji:null,all:[]})}
 }
-
-async function resolveMalEpisodeInternal(malIds, tvdbEpisode, tmdbEpisode, malCache, fetchLive) {
-  for (const mal of malIds.slice(0, 8)) {
-    let eps = malCache.get(String(mal))?.episodes || [];
-    
-    if (!eps.length && fetchLive) {
-      try {
-        const ani = await aniMal(mal);
-        eps = parseMalEpisodes(ani);
-        malCache.set(String(mal), { episodes: eps, ani });
-      } catch (e) { /* ignore */ }
-    }
-    
-    if (!eps.length) continue;
-
-    if (tvdbEpisode && tvdbEpisode.tvdb_episode_id) {
-      const x = eps.find(e => e.tvdb_episode_id && String(e.tvdb_episode_id) === String(tvdbEpisode.tvdb_episode_id));
-      if (x) return { mal_id: String(mal), mal_episode: x.episode, match: "tvdb_episode_id", title: x.title };
-    }
-    if (tvdbEpisode && tvdbEpisode.absolute != null && tvdbEpisode.absolute > 0) {
-      const x = eps.find(e => e.absolute != null && Number(e.absolute) === Number(tvdbEpisode.absolute));
-      if (x) return { mal_id: String(mal), mal_episode: x.episode, match: "absolute", title: x.title };
-    }
-    if (tvdbEpisode && tvdbEpisode.air_date) {
-      const xs = eps.filter(e => dateMatch(e.air_date, tvdbEpisode.air_date)).sort((a, b) => a.episode - b.episode);
-      if (xs.length) {
-        const x = xs.find(e => titleMatch(e.title, tvdbEpisode.title)) || xs[0];
-        return { mal_id: String(mal), mal_episode: x.episode, match: "air_date", title: x.title };
-      }
-    }
-    if (tvdbEpisode && tvdbEpisode.title) {
-      const x = eps.find(e => titleMatch(e.title, tvdbEpisode.title));
-      if (x) return { mal_id: String(mal), mal_episode: x.episode, match: "title", title: x.title };
-    }
-    if (tmdbEpisode && tmdbEpisode.air_date) {
-      const xs = eps.filter(e => dateMatch(e.air_date, tmdbEpisode.air_date)).sort((a, b) => a.episode - b.episode);
-      if (xs.length) return { mal_id: String(mal), mal_episode: xs[0].episode, match: "canonical_air_date", title: xs[0].title };
-    }
-  }
-  return null;
+}));
+return cache
 }
-
-function resolveMalEpisodeCached(malIds, tvdbEpisode, tmdbEpisode, malCache) {
-  return resolveMalEpisodeInternal(malIds, tvdbEpisode, tmdbEpisode, malCache, false);
+function resolveMalEpisodeCached(malIds,tvdbEpisode,tmdbEpisode,malCache){
+for(const mal of malIds.slice(0,8)){
+const entry=malCache.get(String(mal)),eps=entry&&entry.episodes||[];
+if(tvdbEpisode&&tvdbEpisode.tvdb_episode_id){
+const x=eps.find(e=>e.tvdb_episode_id&&String(e.tvdb_episode_id)===String(tvdbEpisode.tvdb_episode_id));
+if(x)return{mal_id:String(mal),mal_episode:x.episode,match:"tvdb_episode_id",title:x.title}
 }
-
-async function resolveMalEpisode(malIds, tvdbEpisode, tmdbEpisode) {
-  const cache = new Map();
-  return resolveMalEpisodeInternal(malIds, tvdbEpisode, tmdbEpisode, cache, true);
+if(tvdbEpisode&&tvdbEpisode.absolute!=null&&tvdbEpisode.absolute>0){
+const x=eps.find(e=>e.absolute!=null&&Number(e.absolute)===Number(tvdbEpisode.absolute));
+if(x)return{mal_id:String(mal),mal_episode:x.episode,match:"absolute",title:x.title}
 }
-
+if(tvdbEpisode&&tvdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tvdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length){
+const x=xs.find(e=>titleMatch(e.title,tvdbEpisode.title))||xs[0];
+return{mal_id:String(mal),mal_episode:x.episode,match:"air_date",title:x.title}
+}
+}
+if(tvdbEpisode&&tvdbEpisode.title){
+const x=eps.find(e=>titleMatch(e.title,tvdbEpisode.title));
+if(x)return{mal_id:String(mal),mal_episode:x.episode,match:"title",title:x.title}
+}
+if(tmdbEpisode&&tmdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tmdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length)return{mal_id:String(mal),mal_episode:xs[0].episode,match:"canonical_air_date",title:xs[0].title}
+}
+}
+return null
+}
+async function resolveMalEpisode(malIds,tvdbEpisode,tmdbEpisode){
+const results=await Promise.all(malIds.slice(0,5).map(async mal=>{try{return{mal:String(mal),data:await aniMal(mal)}}catch(e){return{mal:String(mal),data:null}}}));
+for(const r of results){
+const eps=parseMalEpisodes(r.data);
+if(tvdbEpisode&&tvdbEpisode.tvdb_episode_id){
+const x=eps.find(e=>e.tvdb_episode_id&&String(e.tvdb_episode_id)===String(tvdbEpisode.tvdb_episode_id));
+if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"tvdb_episode_id",title:x.title}
+}
+if(tvdbEpisode&&tvdbEpisode.absolute!=null&&tvdbEpisode.absolute>0){
+const x=eps.find(e=>e.absolute!=null&&Number(e.absolute)===Number(tvdbEpisode.absolute));
+if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"absolute",title:x.title}
+}
+if(tvdbEpisode&&tvdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tvdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length){const x=xs.find(e=>titleMatch(e.title,tvdbEpisode.title))||xs[0];return{mal_id:r.mal,mal_episode:x.episode,match:"air_date",title:x.title}}
+}
+if(tvdbEpisode&&tvdbEpisode.title){
+const x=eps.find(e=>titleMatch(e.title,tvdbEpisode.title));
+if(x)return{mal_id:r.mal,mal_episode:x.episode,match:"title",title:x.title}
+}
+if(tmdbEpisode&&tmdbEpisode.air_date){
+const xs=eps.filter(e=>dateMatch(e.air_date,tmdbEpisode.air_date)).sort((a,b)=>a.episode-b.episode);
+if(xs.length)return{mal_id:r.mal,mal_episode:xs[0].episode,match:"canonical_air_date",title:xs[0].title}
+}
+}
+return null
+}
 async function populateWindow(id,s,start,end,seed,parent,oldSeason){
 const ext=await external(id);
 const[el,series]=await Promise.all([eligibility(id,parent,ext),tmdb(id)]);
@@ -570,13 +542,148 @@ await new Promise(resolve=>setTimeout(resolve,MAPPING_POLL_MS));
 }
 return null
 }
+
+const MOVIE_PREFIX="anime:movie:",FRANCHISE_PREFIX="anime:franchise:",MOVIE_MAX=12;
+function validTmdbId(id){return /^\d{1,10}$/.test(String(id||""))&&Number(id)>0}
+async function tmdbMovie(id,path=""){
+ const r=await fetchJson(`https://api.themoviedb.org/3/movie/${encodeURIComponent(id)}${path}${path.includes("?")?"&":"?"}api_key=${encodeURIComponent(TMDB_KEY)}`,7000);
+ return r.data;
+}
+async function movieEligibility(id,old,meta){
+ if(old&&old.media_type==="movie"&&old.animeEligible===true&&old.mal_id)return{ok:true,mal:String(old.mal_id),source:"stored"};
+ const imdb=meta&&meta.imdb_id||old&&old.imdb_id||null;
+ const [ar,azr]=await Promise.all([
+  arm(id,imdb,null),
+  fetchJson(`https://api.ani.zip/mappings?themoviedb_id=${encodeURIComponent(id)}`,5000)
+ ]);
+ const az=azr&&azr.data;
+ const candidates=uniq([...(ar.ids||[]),...aniIds(az)]).slice(0,4);
+ let temporary=false;
+ const tmdbNames=[meta&&meta.title,meta&&meta.original_title].map(normTitle).filter(Boolean);
+ const aniNames=az&&az.titles&&typeof az.titles==="object"?Object.values(az.titles).map(normTitle).filter(Boolean):[];
+ for(const mal of candidates){
+  try{
+   const jr=await fetchJson(`https://api.jikan.moe/v4/anime/${encodeURIComponent(mal)}`,5000);
+   if(jr.state!=="HIT"||!jr.data||!jr.data.data){temporary=true;continue}
+   const d=jr.data.data;
+   if(String(d.type||"").toLowerCase()!=="movie")continue;
+   const malNames=[d.title,d.title_english,d.title_japanese,...(Array.isArray(d.titles)?d.titles.map(x=>x&&x.title):[])].map(normTitle).filter(Boolean);
+   if(!malNames.some(n=>tmdbNames.includes(n)||aniNames.includes(n))){temporary=true;continue}
+   return{ok:true,mal:String(d.mal_id||mal),source:"authoritative",malTitle:d.title||d.title_english||"",providerIds:{}};
+  }catch(e){temporary=true}
+ }
+ const states=[...(ar.states||[]),azr&&azr.state||"UNKNOWN"];
+ const successful=states.length>0&&states.every(x=>x==="HIT"||x==="MISS");
+ if(!candidates.length&&successful&&!temporary)return{ok:false,temporary:false,source:"NO_ANIME_SOURCE"};
+ if(candidates.length&&successful&&!temporary)return{ok:false,temporary:false,source:"NOT_AN_ANIME_MOVIE"};
+ return{ok:false,temporary:true,source:"UNKNOWN"};
+}
+async function readMovieRecord(id){
+ try{
+  const m=await db().get(`${MOVIE_PREFIX}${id}`,{type:"json",consistency:"eventual"});
+  return m&&m.media_type==="movie"&&String(m.tmdb_id)===String(id)?m:null;
+ }catch(e){log(`MOVIE READ FAILED TMDB=${id} ${e.message}`);return null}
+}
+async function lookupMovie(id){
+ const m=await readMovieRecord(id);
+ return m&&m.animeEligible===true&&m.mal_id?m:null;
+}
+async function movieCandidates(id,collectionId){
+ const out=[],seen=new Set([String(id)]);
+ if(collectionId){
+  const c=await fetchJson(`https://api.themoviedb.org/3/collection/${encodeURIComponent(collectionId)}?api_key=${encodeURIComponent(TMDB_KEY)}`,7000);
+  for(const p of c.data&&Array.isArray(c.data.parts)?c.data.parts:[]){
+   const n=String(p&&p.id||"");
+   if(validTmdbId(n)&&!seen.has(n)&&out.length<MOVIE_MAX-1){seen.add(n);out.push(n)}
+  }
+ }
+ return out;
+}
+async function populateMovieFranchise(id){
+ const st=db(),lockKey=`building:movie:${id}`,now=Date.now();
+ const existing=await lookupMovie(id);if(existing)return{ok:true,existing:true,movie:existing};
+ const storedInitial=await readMovieRecord(id);
+ if(storedInitial&&storedInitial.eligibility_status==="confirmed_non_anime")return{ok:true,eligible:false,reason:storedInitial.eligibility_reason||"NO_ANIME_SOURCE"};
+ const old=await st.get(lockKey,{type:"json",consistency:"eventual"}).catch(()=>null);
+ if(old&&Number(old.expiresAt)>now)return{ok:true,locked:true};
+ const lock=await st.setJSON(lockKey,{tmdb_id:id,media_type:"movie",startedAt:now,expiresAt:now+LOCK_TTL},{onlyIfNew:true}).catch(()=>null);
+ if(!lock||!lock.modified)return{ok:true,locked:true};
+ let franchiseLockKey=null,franchiseLockOwned=false;
+ try{
+  const requested=await tmdbMovie(id);
+  if(!requested||Number(requested.id)!==Number(id))throw new Error("TMDB movie metadata unavailable");
+  const collectionId=requested.belongs_to_collection&&requested.belongs_to_collection.id?String(requested.belongs_to_collection.id):null;
+  if(collectionId){
+   franchiseLockKey=`building:franchise:${collectionId}`;
+   const priorLock=await st.get(franchiseLockKey,{type:"json",consistency:"eventual"}).catch(()=>null);
+   if(priorLock&&Number(priorLock.expiresAt)>Date.now())return{ok:true,locked:true,franchise_id:collectionId};
+   if(priorLock)await st.delete(franchiseLockKey).catch(()=>{});
+   const franchiseLock=await st.setJSON(franchiseLockKey,{franchise_id:collectionId,startedAt:Date.now(),expiresAt:Date.now()+LOCK_TTL},{onlyIfNew:true}).catch(()=>null);
+   if(!franchiseLock||!franchiseLock.modified)return{ok:true,locked:true,franchise_id:collectionId};
+   franchiseLockOwned=true;
+  }
+  // The requested movie itself must pass authoritative anime identification before
+  // it can authorize any related franchise work.
+  const requestedEligibility=await movieEligibility(id,null,requested);
+  if(!requestedEligibility.ok){
+   if(requestedEligibility.temporary)throw new Error("Movie anime eligibility is temporarily unknown");
+   await st.setJSON(`${MOVIE_PREFIX}${id}`,{tmdb_id:String(id),media_type:"movie",animeEligible:false,eligibility_status:"confirmed_non_anime",eligibility_reason:requestedEligibility.source,franchise_id:collectionId,updatedAt:Date.now()});
+   return{ok:true,eligible:false,reason:requestedEligibility.source};
+  }
+  const requestedRecord={tmdb_id:String(id),media_type:"movie",mal_id:String(requestedEligibility.mal),mal_title:requestedEligibility.malTitle||null,provider_ids:requestedEligibility.providerIds||{},imdb_id:requested.imdb_id||null,title:requested.title||"",original_title:requested.original_title||"",franchise_id:collectionId,animeEligible:true,eligibility_status:"verified",mapping_source:requestedEligibility.source,updatedAt:Date.now()};
+  const oldRequested=await readMovieRecord(id);
+  if(!oldRequested||oldRequested.animeEligible!==true)await st.setJSON(`${MOVIE_PREFIX}${id}`,requestedRecord);
+  const ids=(await movieCandidates(id,collectionId)).slice(0,MOVIE_MAX-1);
+  const resolved=[requestedRecord];
+  for(let i=0;i<ids.length;i+=2){
+   const batch=await Promise.all(ids.slice(i,i+2).map(async movieId=>{
+    const meta=await tmdbMovie(movieId);
+    if(!meta||Number(meta.id)!==Number(movieId))return null;
+    const stored=await readMovieRecord(movieId);
+    if(stored&&stored.eligibility_status==="confirmed_non_anime")return null;
+    if(stored&&stored.animeEligible===true&&stored.mal_id)return stored;
+    const elig=await movieEligibility(movieId,stored,meta);
+    if(!elig.ok){
+     if(!elig.temporary)await st.setJSON(`${MOVIE_PREFIX}${movieId}`,{tmdb_id:movieId,media_type:"movie",animeEligible:false,eligibility_status:"confirmed_non_anime",eligibility_reason:elig.source,franchise_id:collectionId,updatedAt:Date.now()});
+     return null;
+    }
+    return{tmdb_id:String(movieId),media_type:"movie",mal_id:String(elig.mal),mal_title:elig.malTitle||null,provider_ids:elig.providerIds||{},imdb_id:meta.imdb_id||null,title:meta.title||"",original_title:meta.original_title||"",franchise_id:collectionId,animeEligible:true,eligibility_status:"verified",mapping_source:elig.source,updatedAt:Date.now()};
+   }));
+   for(const rec of batch)if(rec&&rec.media_type==="movie"&&rec.animeEligible===true)resolved.push(rec);
+  }
+  for(const rec of resolved){
+   const prior=await lookupMovie(rec.tmdb_id);
+   if(!prior)await st.setJSON(`${MOVIE_PREFIX}${rec.tmdb_id}`,rec);
+  }
+  const franchiseId=collectionId||`movie-${id}`;
+  const priorFranchise=await st.get(`${FRANCHISE_PREFIX}${franchiseId}`,{type:"json",consistency:"eventual"}).catch(()=>null);
+  const movieIds=uniq([...(priorFranchise&&Array.isArray(priorFranchise.movies)?priorFranchise.movies.map(x=>x&&x.tmdb_id):[]),...resolved.map(x=>x.tmdb_id)]).slice(0,MOVIE_MAX);
+  await st.setJSON(`${FRANCHISE_PREFIX}${franchiseId}`,{franchise_id:franchiseId,collection_tmdb_id:collectionId,media_type:"franchise",tv_series_tmdb_ids:priorFranchise&&Array.isArray(priorFranchise.tv_series_tmdb_ids)?priorFranchise.tv_series_tmdb_ids:[],seasons:priorFranchise&&Array.isArray(priorFranchise.seasons)?priorFranchise.seasons:[],movies:movieIds.map(movie_tmdb_id=>({tmdb_id:movie_tmdb_id,media_type:"movie"})),updatedAt:Date.now()});
+  return{ok:true,mapped:resolved.length,franchise_id:franchiseId};
+ }finally{
+  await st.delete(lockKey).catch(()=>{});
+  if(franchiseLockKey&&franchiseLockOwned)await st.delete(franchiseLockKey).catch(()=>{});
+ }
+}
 exports.handler=async event=>{
 const started=Date.now(),method=(event.httpMethod||"GET").toUpperCase();
 if(method==="OPTIONS")return json(204,{});
 if(method!=="GET")return json(405,{ok:false,error:"Method not allowed"});
 try{
-const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode);
-log(`REQUEST TMDB=${id} S${p.season}E${p.episode}`);
+const p=event.queryStringParameters||{},id=String(p.tmdbId||p.tmdb_id||"").trim(),s=num(p.season),e=pos(p.episode),mediaType=String(p.mediaType||p.media_type||"tv").toLowerCase();
+log(`REQUEST TMDB=${id} type=${mediaType} S${p.season}E${p.episode}`);
+if(mediaType==="movie"){
+ if(!validTmdbId(id))return json(400,{ok:false,error:"A valid TMDB movie ID is required"});
+ const hit=await lookupMovie(id);
+ if(hit)return json(200,{ok:true,mediaType:"movie",mapping:hit,eligibility:"anime"});
+ const explicit=String(p.populate||"")==="1"&&String(p.trigger||"")==="anizone-lazy"&&String(p.pending||"")!=="1"&&String(p.operation||"")==="movie-franchise";
+ if(explicit){
+  const launched=await triggerBackground(event,{media_type:"movie",operation:"movie-franchise",tmdb_id:id});
+  if(launched)return json(202,{ok:false,pending:true,mediaType:"movie",mapping:null,eligibility:"unknown"});
+ }
+ return json(202,{ok:false,pending:true,mediaType:"movie",mapping:null,eligibility:"unknown"});
+}
+if(mediaType!=="tv")return json(400,{ok:false,error:"Unsupported media type"});
 if(!/^\d+$/.test(id)||id.length>MAX_ID||s===null||!e)return json(400,{ok:false,error:"tmdbId, season and episode are required"});
 const hit=await sharedLookup(id,s,e);
 if(hit){
@@ -585,28 +692,14 @@ return json(200,{ok:true,source:hit.source,updatedAt:Date.now(),mapping:hit.mapp
 }
 const explicitPopulation=String(p.populate||"")==="1"&&String(p.trigger||"")==="anizone-lazy"&&String(p.pending||"")!=="1";
 if(explicitPopulation){
-const st = db();
-const lockKey = `building:${id}`;
-const lockCheck = await st.get(lockKey, {type:"json", consistency:"eventual"}).catch(() => null);
-const isLocked = lockCheck && Number(lockCheck.expiresAt) > Date.now();
-if (!isLocked) {
-    log(`TRIGGERING BACKGROUND POPULATION TMDB=${id}`);
-    const seed={tmdb_id:id,season:s,episode:e};
-    const launched=await triggerBackground(event,seed);
-    if(launched){
-        const pendingHit=await waitForShared(id,s,e);
-        if(pendingHit){
-            log(`RESULT source=${pendingHit.source} time=${Date.now()-started}ms`);
-            return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:pendingHit.mapping,state:await boundaryState(id,s,e)})
-        }
-    }
-} else {
-    log(`POPULATION ALREADY LOCKED TMDB=${id}, waiting for shared`);
-    const pendingHit=await waitForShared(id,s,e);
-    if(pendingHit){
-        log(`RESULT source=${pendingHit.source} time=${Date.now()-started}ms`);
-        return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:pendingHit.mapping,state:await boundaryState(id,s,e)})
-    }
+const seed={tmdb_id:id,season:s,episode:e};
+const launched=await triggerBackground(event,seed);
+if(launched){
+const pendingHit=await waitForShared(id,s,e);
+if(pendingHit){
+log(`RESULT source=${pendingHit.source} time=${Date.now()-started}ms`);
+return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:pendingHit.mapping,state:await boundaryState(id,s,e)})
+}
 }
 }
 const eligibility=await eligibilityState(id);
@@ -618,3 +711,5 @@ return json(500,{ok:false,error:error&&error.message?error.message:"Mapping serv
 }
 };
 exports.populateIfNeeded=populateIfNeeded;
+exports.populateMovieFranchise=populateMovieFranchise;
+exports.lookupMovie=lookupMovie;
