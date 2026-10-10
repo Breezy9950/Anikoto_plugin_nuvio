@@ -187,13 +187,20 @@ async function mapperLookup(tmdbId,season,episode){
   for(const k of ["anime_title","title","name","mal_title","mal_title_english","mal_title_romanji"]){
     if(m[k])titles.push(m[k])
   }
-  return{
+    return {
     malId,
     malEpisode,
-    title:String(m.anime_title||m.title||m.name||m.mal_title||"").trim(),
-    titles:[...new Set(titles.map(x=>String(x||"").trim()).filter(Boolean))],
-    seasonName:String(m.season_name||m.seasonName||"").trim()
-  }
+    title: String(m.anime_title || m.title || m.name || m.mal_title || "").trim(),
+    titles: [...new Set(
+      titles.concat([m.season_title, m.seasonTitle])
+        .map(x => String(x || "").trim())
+        .filter(Boolean)
+    )],
+    seasonName: String(
+      m.season_title || m.seasonTitle ||
+      m.season_name || m.seasonName || ""
+    ).trim()
+  };
 }
 
 async function movieMapperLookup(tmdbId){
@@ -250,27 +257,47 @@ function titleSeason(s){
   m=x.match(/\bs([0-9]{1,2})(?:\b|[-\s])/i);
   return m?Number(m[1]):null
 }
-function cardScore(card,targets,base,season){
-  const ct=normalizeTitle(card.name),cb=normalizeTitle(base);
-  let best=0;
-  for(const t of targets){
-    const nt=normalizeTitle(t);
-    if(!nt)continue;
-    if(ct===nt)best=Math.max(best,1000);
-    else if(ct.includes(nt)||nt.includes(ct))best=Math.max(best,800);
-    else{
-      const nb=normalizeTitle(searchTitleBase(t));
-      if(nb&&(ct===nb||ct.includes(nb)||nb.includes(ct)))best=Math.max(best,650)
+function cardScore(card, targets, base, season) {
+  const ct = normalizeTitle(card.name);
+  const explicit = titleSeason(card.name);
+  const cardBase = normalizeTitle(
+    String(card.name || "")
+      .replace(/\s*[-:]?\s*(?:season|saison)\s*\d+\s*$/i, "")
+      .replace(/\s*[-:]?\s*\d+(?:st|nd|rd|th)\s+season\s*$/i, "")
+  );
+
+  let best = 0;
+
+  for (const t of targets) {
+    const nt = normalizeTitle(t);
+
+    if (nt && ct === nt) best = Math.max(best, 1200);
+    if (nt && cardBase === nt && explicit === season) {
+      best = Math.max(best, 1200);
+    }
+
+    const withoutSeason = normalizeTitle(
+      String(t || "")
+        .replace(/\s*[-:]?\s*(?:season|saison)\s*\d+\s*$/i, "")
+        .replace(/\s*[-:]?\s*\d+(?:st|nd|rd|th)\s+season\s*$/i, "")
+    );
+
+    if (withoutSeason && ct === withoutSeason) {
+      best = Math.max(best, 900);
     }
   }
-  if(cb&&ct===cb)best=Math.max(best,900);
-  const explicit=titleSeason(card.name);
-  if(explicit!==null){
-    if(explicit===season)best+=150;
-    else best-=1000
-  }else if(season===1&&/\b(?:season|saison)\s*\d+\b/i.test(card.name))best-=700;
-  return best
+
+  const nb = normalizeTitle(base);
+  if (nb && ct === nb) best = Math.max(best, 850);
+
+  if (explicit !== null) {
+    if (explicit === season) best += 150;
+    else best -= 1000;
+  }
+
+  return best;
 }
+
 
 /* ---------- FIXED SEARCH PARSER ---------- */
 function parseSearchCards(html){
@@ -329,30 +356,150 @@ async function search(query){
 function absoluteUrl(href){
   try{return new URL(href,BASE+"/").toString()}catch(e){return BASE+(String(href||"").startsWith("/")?href:"/"+href)}
 }
-async function findAnime(mapping,season){
-  const rawQueries=[mapping.title,...mapping.titles].filter(Boolean);
-  const queries=[];
-  for(const q of rawQueries){
+async function findAnime(mapping, season) {
+  const rawQueries = [
+    mapping.seasonName,
+    mapping.title,
+    ...mapping.titles
+  ].filter(Boolean);
+
+  const queries = [];
+  for (const q of rawQueries) {
     queries.push(String(q));
-    const b=searchTitleBase(q);
-    if(b&&b!==q)queries.push(b)
+    const b = searchTitleBase(q);
+    if (b && b !== q) queries.push(b);
   }
-  const unique=[...new Set(queries.map(x=>x.trim()).filter(Boolean))];
-  if(!unique.length)return null;
-  const allCards=[];
-  const seen=new Set();
-  const results=await settle(unique.slice(0,6).map(q=>()=>search(q)),3);
-  for(const rs of results)for(const c of rs||[]){
-    const key=String(c.href);
-    if(!seen.has(key)){seen.add(key);allCards.push(c)}
+
+  const unique = [...new Set(queries.map(x => x.trim()).filter(Boolean))];
+  if (!unique.length) return null;
+
+  const allCards = [];
+  const seen = new Set();
+  const results = await settle(
+    unique.slice(0, 6).map(q => () => search(q)),
+    3
+  );
+
+  for (const rs of results) {
+    for (const c of rs || []) {
+      const key = String(c.href);
+      if (!seen.has(key)) {
+        seen.add(key);
+        allCards.push(c);
+      }
+    }
   }
-  if(!allCards.length)return null;
-  const scored=allCards.map(c=>({c,score:cardScore(c,unique,mapping.title,season)}))
-    .filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
-  const best=scored[0];
-  if(!best)return null;
-  log("ANIME MATCH "+best.c.name+" score="+best.score);
-  return best.c
+
+  const scored = allCards
+    .map(c => ({ c, score: cardScore(c, unique, mapping.title, season) }))
+    .filter(x => x.score >= 850)
+    .sort((a, b) => b.score - a.score);
+
+  if (!scored.length) return null;
+
+  const verified = [];
+
+  for (const item of scored) {
+    const animeUrl = absoluteUrl(item.c.href);
+    const animeId = await getAnimeId(animeUrl);
+    if (!animeId) continue;
+
+    const episodes = await getEpisodes(animeId);
+    if (!episodes.length) continue;
+
+    const malIds = episodes
+      .map(x => String(x.malId || "").trim())
+      .filter(Boolean);
+
+    const hasMatchingMalId = malIds.some(
+      x => x === String(mapping.malId)
+    );
+
+    const hasConflictingMalIds =
+      malIds.length > 0 && !hasMatchingMalId;
+
+    const hasRequestedEpisode = episodes.some(
+      x => x.episodeNumber === mapping.malEpisode
+    );
+
+    if (hasMatchingMalId && hasRequestedEpisode) {
+      verified.push({
+        c: item.c,
+        score: item.score + 10000,
+        animeId,
+        episodes,
+        identity: "mal-id"
+      });
+      continue;
+    }
+
+    if (hasConflictingMalIds) {
+      log(
+        "REJECT CANDIDATE " + item.c.name +
+        " — data-mal mismatch expected=" + mapping.malId
+      );
+      continue;
+    }
+
+    const exactTargets = [
+      mapping.seasonName,
+      mapping.title,
+      ...mapping.titles
+    ].map(normalizeTitle).filter(Boolean);
+
+    const candidateTitle = normalizeTitle(item.c.name);
+    const candidateBase = normalizeTitle(
+      String(item.c.name || "")
+        .replace(/\s*[-:]?\s*(?:season|saison)\s*\d+\s*$/i, "")
+        .replace(/\s*[-:]?\s*\d+(?:st|nd|rd|th)\s+season\s*$/i, "")
+    );
+
+    const exactTitle =
+      exactTargets.includes(candidateTitle) ||
+      (
+        titleSeason(item.c.name) === season &&
+        exactTargets.includes(candidateBase)
+      );
+
+    if (exactTitle && hasRequestedEpisode) {
+      verified.push({
+        c: item.c,
+        score: item.score,
+        animeId,
+        episodes,
+        identity: "exact-title"
+      });
+      continue;
+    }
+
+    log("REJECT CANDIDATE " + item.c.name + " — identity not verified");
+  }
+
+  verified.sort((a, b) => b.score - a.score);
+
+  if (!verified.length) return null;
+
+  if (
+    verified.length > 1 &&
+    verified[0].score === verified[1].score &&
+    String(verified[0].c.href) !== String(verified[1].c.href)
+  ) {
+    log("AMBIGUOUS ANIME MATCH — refusing to choose");
+    return null;
+  }
+
+  const best = verified[0];
+
+  log(
+    "ANIME MATCH " + best.c.name +
+    " identity=" + best.identity +
+    " score=" + best.score
+  );
+
+  return Object.assign({}, best.c, {
+    verifiedAnimeId: best.animeId,
+    verifiedEpisodes: best.episodes
+  });
 }
 
 /* ---------- Anikoto anime / episode / server discovery ---------- */
@@ -899,9 +1046,13 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         if(!mapping||!tmdbInfo)return[];
         const movieCard=await findMovie(mapping,tmdbInfo);
         if(!movieCard)return[];
-        const animeUrl=absoluteUrl(movieCard.href),animeId=await getAnimeId(animeUrl);
-        if(!animeId)return[];
-        const items=await getEpisodes(animeId);
+        const animeUrl = absoluteUrl(animeResult.href);
+const animeId =
+  animeResult.verifiedAnimeId || await getAnimeId(animeUrl);
+if (!animeId) return [];
+
+const episodes =
+  animeResult.verifiedEpisodes || await getEpisodes(animeId);
         const titleNeedles=[normalizeTitle(tmdbInfo.title),normalizeTitle(tmdbInfo.originalTitle),...mapping.titles.map(normalizeTitle)].filter(Boolean);
         let item=items.find(x=>x.title&&titleNeedles.includes(normalizeTitle(x.title)));
         if(!item&&items.length===1)item=items[0];
@@ -929,10 +1080,13 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         log("ANIME MATCH FAILED");
         return[]
       }
-      const animeUrl=absoluteUrl(animeResult.href);
-      const animeId=await getAnimeId(animeUrl);
-      if(!animeId)return[];
-      const episodes=await getEpisodes(animeId);
+      const animeUrl = absoluteUrl(animeResult.href);
+const animeId =
+  animeResult.verifiedAnimeId || await getAnimeId(animeUrl);
+if (!animeId) return [];
+
+const episodes =
+  animeResult.verifiedEpisodes || await getEpisodes(animeId);
       let episodeMatch=episodes.find(x=>x.episodeNumber===mapping.malEpisode);
       if(!episodeMatch){
         log("EPISODE MATCH FAILED MAL E"+mapping.malEpisode);
