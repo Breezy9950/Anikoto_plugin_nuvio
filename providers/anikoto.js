@@ -17,6 +17,18 @@ const AJAX_HEADERS={
 
 function log(x){console.log("[Anikoto] "+x)}
 
+// ---------- UI FORMATTING HELPER ----------
+function buildStreamTitle(providerName, mediaTitle, tags, size, audioList, subList) {
+    const lines = [];
+    if (providerName) lines.push(providerName);
+    if (mediaTitle) lines.push(mediaTitle);
+    if (tags && tags.length > 0) lines.push(tags.join(" • "));
+    if (size && size !== "0 B" && size !== "Unknown" && size !== "") lines.push(size);
+    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
+    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
+    return lines.join("\n");
+}
+
 class TTLCache{
   constructor(){this.m=new Map()}
   get(k){const x=this.m.get(k);if(!x)return undefined;if(x.e<=Date.now()){this.m.delete(k);return undefined}return x.v}
@@ -816,8 +828,16 @@ async function resolveServers(servers,quality){
     const stream=await extractHost(streamUrl,quality,String(server.srv_name||"Anikoto"));
     log("EXTRACT "+(host||"unknown")+" "+(Date.now()-extractStarted)+"ms");
     if(!stream)return null;
-    stream.title="Anikoto "+(server.dataType==="dub"?"DUB":"SUB")+" - "+(server.srv_name||"Anikoto");
-    stream.name="Anikoto ["+(server.dataType==="dub"?"DUB":"SUB")+"] "+(server.srv_name||"Anikoto");
+    
+    // UI FORMATTING
+    const isDub = server.dataType === "dub";
+    const langTag = isDub ? "DUB" : "SUB";
+    const providerName = `Anikoto [${langTag}] ${server.srv_name||"Anikoto"}`;
+    const audioList = isDub ? ["English"] : ["Japanese"];
+    const subList = isDub ? [] : ["English"];
+    
+    stream.title = buildStreamTitle(providerName, server._mediaTitle || "Anime", [langTag, "multi-quality"], "", audioList, subList);
+    stream.name = providerName;
     stream.provider="anikoto";
     stream.type=streamType(stream.url);
     if(!state.firstStreamLogged){
@@ -830,9 +850,11 @@ async function resolveServers(servers,quality){
   log("SERVER/EXTRACTION TOTAL "+(Date.now()-started)+"ms");
   return out
 }
-async function resolveMode(episodeId,isDub,quality){
+async function resolveMode(episodeId,isDub,quality,mediaTitle){
   const servers=(await getServerList(episodeId)).filter(x=>x.dataType===(isDub?"dub":"sub"));
   if(!servers.length)return[];
+  // Inject mediaTitle into server objects for the formatter
+  servers.forEach(s => s._mediaTitle = mediaTitle);
   const streams=await resolveServers(servers,quality);
   const out=[],seen=new Set();
   for(const s of streams){
@@ -882,7 +904,6 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       const episodes=await getEpisodes(animeId);
       let episodeMatch=episodes.find(x=>x.episodeNumber===mapping.malEpisode);
       if(!episodeMatch&&isMovie&&episodes.length===1){
-        // Some Anikoto movie pages expose a single episode that isn't numbered 1.
         episodeMatch=episodes[0];
         log("MOVIE SINGLE-EPISODE FALLBACK E"+episodeMatch.episodeNumber);
       }
@@ -896,7 +917,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       }
       log("EPISODE MATCH E"+episodeMatch.episodeNumber+" ID="+episodeMatch.episodeId);
       const modeResults=await Promise.all(
-        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings)))
+        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings),mapping.title))
       );
       const allStreams=modeResults.flat();
       const seen=new Set(),out=[];
