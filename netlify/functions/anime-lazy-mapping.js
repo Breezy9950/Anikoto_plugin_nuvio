@@ -9,7 +9,6 @@ function pos(v){const n=num(v);return n&&n>0?n:null}
 function db(){return getStore({name:STORE,siteID:process.env.NETLIFY_SITE_ID,token:process.env.NETLIFY_AUTH_TOKEN})}
 function legacyDb(){return getStore({name:LEGACY_LAZY_STORE,siteID:process.env.NETLIFY_SITE_ID,token:process.env.NETLIFY_AUTH_TOKEN})}
 
-// OPTIMIZATION: Concurrency limiter to prevent API rate limits (e.g., Jikan 3/sec, shared TMDB keys)
 async function limitConcurrency(tasks, limit) {
   const results = [];
   const executing = [];
@@ -138,13 +137,10 @@ const record=await store.get(`${TVDB_PREFIX}${tvdbId}`,{type:"json",consistency:
 if(Array.isArray(record)&&record.length)return{candidates:record,source:"shared-tvdb"};
 if(record&&Array.isArray(record.candidates)&&record.candidates.length)return{candidates:record.candidates,source:"shared-tvdb"}
 }catch(error){log(`SHARED DB READ FAILED TVDB=${tvdbId} ${error.message}`)}
-// OPTIMIZATION: Legacy fallback commented out to save Blob ops. Uncomment if needed during migration.
-/*
 try{
 const index=await store.get(INDEX_KEY,{type:"json",consistency:"eventual"});
 if(index&&index.byTvdb&&Array.isArray(index.byTvdb[tvdbId]))return{candidates:index.byTvdb[tvdbId],source:"legacy-index"}
 }catch(error){log(`LEGACY INDEX READ FAILED TVDB=${tvdbId} ${error.message}`)}
-*/
 return{candidates:null,source:"none"};
 }
 function mappingFromCandidate(id,tvdbId,season,episode,selected){
@@ -589,14 +585,28 @@ return json(200,{ok:true,source:hit.source,updatedAt:Date.now(),mapping:hit.mapp
 }
 const explicitPopulation=String(p.populate||"")==="1"&&String(p.trigger||"")==="anizone-lazy"&&String(p.pending||"")!=="1";
 if(explicitPopulation){
-const seed={tmdb_id:id,season:s,episode:e};
-const launched=await triggerBackground(event,seed);
-if(launched){
-const pendingHit=await waitForShared(id,s,e);
-if(pendingHit){
-log(`RESULT source=${pendingHit.source} time=${Date.now()-started}ms`);
-return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:pendingHit.mapping,state:await boundaryState(id,s,e)})
-}
+const st = db();
+const lockKey = `building:${id}`;
+const lockCheck = await st.get(lockKey, {type:"json", consistency:"eventual"}).catch(() => null);
+const isLocked = lockCheck && Number(lockCheck.expiresAt) > Date.now();
+if (!isLocked) {
+    log(`TRIGGERING BACKGROUND POPULATION TMDB=${id}`);
+    const seed={tmdb_id:id,season:s,episode:e};
+    const launched=await triggerBackground(event,seed);
+    if(launched){
+        const pendingHit=await waitForShared(id,s,e);
+        if(pendingHit){
+            log(`RESULT source=${pendingHit.source} time=${Date.now()-started}ms`);
+            return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:pendingHit.mapping,state:await boundaryState(id,s,e)})
+        }
+    }
+} else {
+    log(`POPULATION ALREADY LOCKED TMDB=${id}, waiting for shared`);
+    const pendingHit=await waitForShared(id,s,e);
+    if(pendingHit){
+        log(`RESULT source=${pendingHit.source} time=${Date.now()-started}ms`);
+        return json(200,{ok:true,source:pendingHit.source,updatedAt:Date.now(),mapping:pendingHit.mapping,state:await boundaryState(id,s,e)})
+    }
 }
 }
 const eligibility=await eligibilityState(id);
