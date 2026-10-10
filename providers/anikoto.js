@@ -7,6 +7,7 @@
 const BASE="https://anikototv.to";
 const AJAX=BASE+"/ajax";
 const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping";
+const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 const UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
 const AJAX_HEADERS={
   "Referer":BASE+"/",
@@ -61,6 +62,15 @@ async function getJson(url,opt,ms){
     return null
   }
 }
+
+// ---------- TMDB TITLE FETCHER ----------
+async function getTmdbTitle(tmdbId, mediaType) {
+  const type = mediaType === "movie" ? "movie" : "tv";
+  const url = "https://api.themoviedb.org/3/" + type + "/" + encodeURIComponent(tmdbId) + "?api_key=" + TMDB_API_KEY + "&language=en-US";
+  const d = await getJson(url, { headers: { "Accept": "application/json" } }, 3500);
+  return d ? (d.name || d.title || d.original_name || d.original_title || "") : "";
+}
+
 async function memo(key,ttl,fn){
   const hit=CACHE.get(key);
   if(hit!==undefined)return await Promise.resolve(hit);
@@ -888,6 +898,12 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         return[]
       }
       log("MAPPING HIT MAL="+mapping.malId+" E"+mapping.malEpisode);
+      
+      // FETCH CANONICAL TMDB TITLE
+      const tmdbTitle = await getTmdbTitle(id, type);
+      const displayTitle = tmdbTitle || mapping.title;
+      log("TITLE: "+displayTitle);
+      
       const searchStarted=Date.now();
       const anime=findAnime(mapping,mapSeason);
       const modesList=modes(settings);
@@ -916,7 +932,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       }
       log("EPISODE MATCH E"+episodeMatch.episodeNumber+" ID="+episodeMatch.episodeId);
       const modeResults=await Promise.all(
-        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings),mapping.title,s,e))
+        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings),displayTitle,s,e))
       );
       const allStreams=modeResults.flat();
       const seen=new Set(),out=[];
