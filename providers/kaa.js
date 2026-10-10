@@ -15,6 +15,73 @@ function _decodeAnimeX(u){if(!String(u).includes('/uwu/'))return {url:u,referer:
 const BASE="https://kaa.lt",KRUSS="https://krussdomi.com/";
 function fixUrl(u){return String(u||"").replace(/^https:\/\/\//,"https://").replace(/^http:\/\/\//,"http://").replace(/^\/\//,"https://")}
 function extractUrls(s,re){return _unique((String(s||"").match(re)||[]).map(fixUrl))}
-async function resolveKaa(m,lang){const searchTitles=_unique([m.title,...m.titles]);const al=await _anilistId(m.malId);if(al)searchTitles.push(...al.titles);let slug="";for(const title of _unique(searchTitles)){const d=await _json(BASE+"/api/search",{method:"POST",headers:{"Content-Type":"application/json","Referer":BASE+"/"},body:JSON.stringify({query:title})},6500);const hits=Array.isArray(d)?d:(d&&d.result)||[];const norm=x=>String(x||"").toLowerCase().replace(/[^a-z0-9]+/g,"");const h=hits.find(x=>norm(x.title)===norm(title))||hits[0];if(h&&h.slug){slug=h.slug;break}}if(!slug)return[];const locale=lang==="dub"?"en-US":"ja-JP";const eps=await _json(`${BASE}/api/show/${encodeURIComponent(slug)}/episodes?ep=${m.episode}&lang=${locale}`,{headers:{"Referer":BASE+"/"}},7000);const list=(eps&&eps.result)||[];const ep=list.find(x=>Number(x.episode_number)===m.episode);if(!ep||!ep.slug)return[];const watch=`${BASE}/${slug}/ep-${m.episode}-${ep.slug}`;const html=await _text(watch,{headers:{"Referer":BASE+"/"}},8500);const clean=html.replace(/\u002F/g,"/").replace(/\\//g,"/");const players=[];const pr=/\{\s*name:\s*["']([^"']+)["']\s*,\s*shortName:\s*["']([^"']+)["']\s*,\s*src:\s*["']([^"']+)["']\s*\}/g;let x;while((x=pr.exec(clean)))if(x[3]&&!/type=dash/i.test(x[3]))players.push(x[3]);if(!players.length)players.push(...extractUrls(clean,/(?:https?:)?\/\/[^\s"'<>]+\/cat-player\/player\?[^\s"'<>]+/g));const results=[];for(const [i,src] of players.slice(0,4).entries()){const embed=await _text(src,{headers:{"Referer":watch}},7500);const master=extractUrls(embed,/(?:https?:)?\/\/[^\s"'<>]+\.m3u8[^\s"'<>]*/g)[0];if(!master)continue;const subtitles=extractUrls(embed,/(?:https?:)?\/\/[^\s"'<>]+\.(?:vtt|srt)[^\s"'<>]*/gi).filter(u=>!u.toLowerCase().includes("preview")).map(url=>({url,language:"en",format:/\.vtt/i.test(url)?"vtt":"srt"}));results.push({name:"Kaa",title:["Nico","Robin","D'Luff","Kaa "+(i+1)][Math.min(i,3)],url:master,quality:"auto",type:"m3u8",headers:{Referer:KRUSS,Origin:"https://krussdomi.com","User-Agent":UA},subtitles,backup:false})}return results}
+function decodeHtml(s){return String(s||"").replace(/&amp;/gi,"&").replace(/&#0*38;/gi,"&").replace(/&quot;/gi,'"').replace(/&#0*39;/g,"'").replace(/&#x2f;/gi,"/").replace(/&#0*47;/g,"/")}
+function cleanEmbedHtml(s){return decodeHtml(String(s||"").replace(/\\u002[fF]/g,"/").replace(/\\\//g,"/"))}
+function findPlayerUrls(html){
+  const clean=cleanEmbedHtml(html),out=[];
+  const add=u=>{u=fixUrl(decodeHtml(String(u||"")).replace(/\\\//g,"/"));if(u&&!out.includes(u))out.push(u)};
+  const patterns=[
+    /\{\s*name\s*:\s*["']([^"']+)["']\s*,\s*shortName\s*:\s*["']([^"']+)["']\s*,\s*src\s*:\s*["']([^"']+)["']\s*\}/g,
+    /(?:https?:)?\/\/[^\s"'<>\\]+\/cat-player\/player\?[^\s"'<>\\]+/g,
+    /(?:src|data-src|data-embed|data-url)\s*=\s*["']([^"']*(?:cat-player\/player|embed|player)[^"']*)["']/gi
+  ];
+  let m; for(const re of patterns){while((m=re.exec(clean))){const u=m.length>=4?m[3]:m[1]||m[0];if(/cat-player\/player|\/embed\/|player\?/i.test(u))add(u)}}
+  return out;
+}
+function findMediaUrls(html,ext){const clean=cleanEmbedHtml(html),out=[];const re=/(?:https?:)?\/\/[^\s"'<>\\]+\.(?:m3u8|vtt|srt)(?:\?[^\s"'<>\\]*)?/gi;let m;while((m=re.exec(clean))){const u=fixUrl(m[0]);if((ext==="m3u8"?/\.m3u8/i.test(u):/\.(?:vtt|srt)/i.test(u))&&u&&!out.includes(u))out.push(u)}return out}
+function decodeHtml(s){return String(s||"").replace(/&amp;/gi,"&").replace(/&#0*38;/gi,"&").replace(/&quot;/gi,'"').replace(/&#0*39;/g,"'").replace(/&#x2f;/gi,"/").replace(/&#0*47;/g,"/")}
+function cleanEmbedHtml(s){return decodeHtml(String(s||"").replace(/\\u002[fF]/g,"/").replace(/\\\//g,"/"))}
+function findPlayerUrls(html){
+  const clean=cleanEmbedHtml(html),out=[];
+  const add=u=>{u=fixUrl(decodeHtml(String(u||"")).replace(/\\\//g,"/"));if(u&&!out.includes(u))out.push(u)};
+  const patterns=[
+    /\{\s*name\s*:\s*["']([^"']+)["']\s*,\s*shortName\s*:\s*["']([^"']+)["']\s*,\s*src\s*:\s*["']([^"']+)["']\s*\}/g,
+    /(?:https?:)?\/\/[^\s"'<>\\]+\/cat-player\/player\?[^\s"'<>\\]+/g,
+    /(?:src|data-src|data-embed|data-url)\s*=\s*["']([^"']*(?:cat-player\/player|embed|player)[^"']*)["']/gi
+  ];
+  let m; for(const re of patterns){while((m=re.exec(clean))){const u=m.length>=4?m[3]:m[1]||m[0];if(/cat-player\/player|\/embed\/|player\?/i.test(u))add(u)}}
+  return out;
+}
+function findMediaUrls(html,ext){const clean=cleanEmbedHtml(html),out=[];const re=/(?:https?:)?\/\/[^\s"'<>\\]+\.(?:m3u8|vtt|srt)(?:\?[^\s"'<>\\]*)?/gi;let m;while((m=re.exec(clean))){const u=fixUrl(m[0]);if((ext==="m3u8"?/\.m3u8/i.test(u):/\.(?:vtt|srt)/i.test(u))&&u&&!out.includes(u))out.push(u)}return out}
+async function resolveKaa(m,lang){
+  const searchTitles=_unique([m.title,...m.titles]);
+  const al=await _anilistId(m.malId);if(al)searchTitles.push(...al.titles);
+  let slug="";
+  for(const title of _unique(searchTitles)){
+    const d=await _json(BASE+"/api/search",{method:"POST",headers:{"Content-Type":"application/json","Referer":BASE+"/"},body:JSON.stringify({query:title})},6500);
+    const hits=Array.isArray(d)?d:(d&&Array.isArray(d.result)?d.result:[]);
+    const norm=x=>String(x||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
+    const h=hits.find(x=>norm(x.title)===norm(title))||hits.find(x=>norm(x.title).includes(norm(title))||norm(title).includes(norm(x.title)))||hits[0];
+    if(h&&h.slug){slug=h.slug;break}
+  }
+  if(!slug){console.log("[Kaa] Search returned no show slug");return[]}
+  const locale=lang==="dub"?"en-US":"ja-JP";
+  const eps=await _json(`${BASE}/api/show/${encodeURIComponent(slug)}/episodes?ep=${m.episode}&lang=${locale}`,{headers:{"Referer":BASE+"/"}},7000);
+  const list=(eps&&Array.isArray(eps.result))?eps.result:[];
+  const ep=list.find(x=>Number(x.episode_number)===m.episode);
+  if(!ep||!ep.slug){console.log(`[Kaa] Episode ${m.episode} missing for ${slug}`);return[]}
+  const epSlug=String(ep.slug).replace(/^\/+/,"");
+  const watch=epSlug.startsWith("ep-")?`${BASE}/${slug}/${epSlug}`:`${BASE}/${slug}/ep-${m.episode}-${epSlug}`;
+  const html=await _text(watch,{headers:{"Referer":BASE+"/"}},8500);
+  if(!html){console.log("[Kaa] Watch page empty");return[]}
+  let players=findPlayerUrls(html);
+  // Some Kaa watch pages place the CatStream iframe only in a data-src attribute.
+  if(!players.length){
+    const clean=cleanEmbedHtml(html),re=/<(?:iframe|source)[^>]+(?:src|data-src)=["']([^"']+)["'][^>]*>/gi;let x;
+    while((x=re.exec(clean))){const u=fixUrl(x[1]);if(/^https?:\/\//i.test(u)&&!players.includes(u))players.push(u)}
+  }
+  if(!players.length){console.log(`[Kaa] No player embeds found on watch page (${html.length} chars)`);return[]}
+  const results=[],streamHeaders={Referer:KRUSS,Origin:"https://krussdomi.com","User-Agent":UA};
+  for(const [i,src] of players.slice(0,6).entries()){
+    const embed=await _text(src,{headers:{"Referer":watch,"User-Agent":UA}},7500);
+    if(!embed)continue;
+    const masters=findMediaUrls(embed,"m3u8");
+    if(!masters.length)continue;
+    const subtitles=findMediaUrls(embed,"(?:vtt|srt)").filter(u=>!u.toLowerCase().includes("preview")).map(url=>({url,language:(url.match(/_([a-z]{2}(?:-[a-z]+)?)\.(?:vtt|srt)(?:\?|$)/i)||[])[1]||"en",name:((url.match(/_([a-z]{2}(?:-[a-z]+)?)\.(?:vtt|srt)(?:\?|$)/i)||[])[1]||"English")}));
+    results.push({name:"Kaa",title:["Nico","Robin","D'Luff","Kaa "+(i+1)][Math.min(i,3)],url:masters[0],quality:"auto",type:"m3u8",headers:streamHeaders,subtitles,backup:false});
+  }
+  if(!results.length)console.log(`[Kaa] Found ${players.length} player(s), but no HLS master playlist resolved`);
+  return results;
+}
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const m=await _mapping(tmdbId,season,episode);if(!m)return[];return await resolveKaa(m,_lang(settings))}catch(e){console.log("[Kaa] "+String(e&&e.message||e));return[]}}
 module.exports={getStreams};
