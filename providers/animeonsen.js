@@ -36,5 +36,5 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       const seasonEp = `Season ${s} Episode ${e}`;
       const streamTitle = buildStreamTitle(m.title || "Anime", seasonEp, ["Japanese"], ["English"]);
       
-      return[{name:"AnimeOnsen",title:streamTitle,description:streamTitle,url,quality:"single",headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
+      return[{name:"AnimeOnsen",title:streamTitle,description:streamTitle,url,headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
 module.exports={getStreams};
