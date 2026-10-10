@@ -12,12 +12,10 @@ const FLIX_HEADERS={"User-Agent":UA,"Accept":"*/*","Origin":FLIXCLOUD_BASE,"Refe
 function log(x){console.log("[Reanime] "+x)}
 
 // ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(providerName, mediaTitle, tags, size, audioList, subList) {
+function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
     const lines = [];
-    if (providerName) lines.push(providerName);
     if (mediaTitle) lines.push(mediaTitle);
-    if (tags && tags.length > 0) lines.push(tags.join(" • "));
-    if (size && size !== "0 B" && size !== "Unknown" && size !== "") lines.push(size);
+    if (seasonEpisode) lines.push(seasonEpisode);
     if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
     if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
     return lines.join("\n");
@@ -221,7 +219,7 @@ async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,elig
   return{alId:candidate.anilistId,title:candidate.title||details.title||info.title,episode:targetEpisode,malId:null};
 }
 
-async function buildStreams(resolved,mediaType){
+async function buildStreams(resolved,mediaType,season,episode){
   const servers=await flixServers(resolved.alId,resolved.episode).catch(()=>null);
   if(!Array.isArray(servers)||!servers.length)return[];
   const subList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="sub");
@@ -235,24 +233,23 @@ async function buildStreams(resolved,mediaType){
     for(let i=0;i<list.length;i++){
       const sv=list[i];
       if(!sv||!sv.dataLink)continue;
-      const serverName=sv.serverName||("HD-"+(i+1));
       
-      // UI FORMATTING
       const isDub = lang === "dub";
       const audioList = isDub ? ["English"] : ["Japanese"];
-      const subList = isDub ? [] : ["English"];
+      const subListFinal = isDub ? [] : ["English"];
+      const seasonEp = mediaType === "movie" ? "Movie" : `Season ${season} Episode ${episode}`;
       
-      tasks.push((async()=>{
+      // FIX: Push a function that returns a Promise
+      tasks.push(async () => {
         const dl=await extractFlix(sv.dataLink).catch(()=>null);
         if(!dl||!dl.url)return null;
         
-        const providerName = `Reanime [${langUpper}] ${serverName}`;
-        const tags = [langUpper, "MKV", dl.quality || "1080p"];
-        const streamTitle = buildStreamTitle(providerName, displayTitle, tags, dl.size || "", audioList, subList);
+        const streamTitle = buildStreamTitle(displayTitle, seasonEp, audioList, subListFinal);
         
         return{
-          name: providerName + " (" + (dl.quality || "1080p") + ")",
+          name: "Reanime",
           title: streamTitle,
+          description: streamTitle,
           url: dl.url,
           quality: dl.quality || "1080p",
           size: dl.size || "Unknown",
@@ -260,13 +257,13 @@ async function buildStreams(resolved,mediaType){
           provider: "reanime",
           type: "mkv"
         }
-      })())
+      });
     }
   };
   queue(subList,"sub");
   queue(dubList,"dub");
   if(!tasks.length)return[];
-  const results=await limitConcurrency(tasks, 4); // Limit to 4 concurrent flix extractions
+  const results=await limitConcurrency(tasks, 4);
   const seen=new Set(),streams=[];
   for(const r of results)if(r&&r.url&&!seen.has(r.url)){seen.add(r.url);streams.push(r)}
   const qr={"2160p":2160,"4k":2160,"1080p":1080,"720p":720,"480p":480,"360p":360};
@@ -305,7 +302,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       }catch(err){log("Mapper error: "+err.message)}
       let streams=[];
       if(resolved){
-        try{streams=await timeout(buildStreams(resolved,type),10000)}
+        try{streams=await timeout(buildStreams(resolved,type,s,e),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
       const allowNativeFallback=eligibility==="anime"||(type==="movie"&&eligibility!=="non_anime");
@@ -315,7 +312,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         try{
           const info=await timeout(tmdbPromise,3500);
           const native=await timeout(resolveNative(id,type,s,e,info,eligibility),7000);
-          if(native){resolved=native;streams=await timeout(buildStreams(native,type),10000)}
+          if(native){resolved=native;streams=await timeout(buildStreams(native,type,s,e),10000)}
         }catch(err){log("Native error: "+err.message)}
       }
       log("Done streams="+streams.length+" src="+source);
