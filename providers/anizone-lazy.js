@@ -1,15 +1,5 @@
 const BASE="https://anizone.to",MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping",TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706",UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36",HEADERS={"User-Agent":UA,"Referer":BASE+"/"},TIMEOUT=15000;
 
-// ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
-    const lines = [];
-    if (mediaTitle) lines.push(mediaTitle);
-    if (seasonEpisode) lines.push(seasonEpisode);
-    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
-    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
-    return lines.join("\n");
-}
-
 async function req(url,opt={},timeout=TIMEOUT){
   const o={...opt,headers:{...HEADERS,...(opt.headers||{})}};
   if(typeof AbortController!=="function"||typeof setTimeout!=="function")return fetch(url,o).catch(()=>null);
@@ -97,19 +87,19 @@ function attr(n,k){return n&&n.attrs?n.attrs[k]:undefined}
 
 function sanitizeJson(s){
   return String(s||"")
-    .replace(/){
-\\u0022/g,'"')
-    .replace(/\\u 0026/g,"&")
-    . tryreplace(/\\'/g,"'{")
-    .replace(/\\\//g,"return/")
-    .replace(/\\\\/ JSONg,"\\")
+    .replace(/\\u0022/g,'"')
+    .replace(/\\u0026/g,"&")
+    .replace(/\\'/g,"'")
+    .replace(/\\\//g,"/")
+    .replace(/\\\\/g,"\\")
     .replace(/\\&/g,"&")
     .replace(/\\0/g,"\\u0000")
     .replace(/\\x([0-9a-fA-F]{2})/g,(_,h)=>"\\u00"+h)
     .replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g,"")
 }
 
-function decodeJSON(s.parse(sanitizeJson(s))}catch(e){return null}
+function decodeJSON(s){
+  try{return JSON.parse(sanitizeJson(s))}catch(e){return null}
 }
 
 function parseCards(html){
@@ -130,7 +120,7 @@ function parseCards(html){
   if(cards.length)return cards;
   const root=parseHTML(src);
   for(const n of all(root,"[x-data]")){
-    const scored[0]. xslugd=String(attr(n,"x-data")||"");
+    const xd=String(attr(n,"x-data")||"");
     if(!xd.includes("anmTitles"))continue;
     const links=all(n,"a");
     const a=links.find(x=>String(attr(x,"href")||"").includes("/anime/"))||null;
@@ -214,6 +204,8 @@ function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTi
     let identity=0,seasonEvidence=0;
     for(const n of titles){
       if(targets.includes(n))identity=Math.max(identity,100);
+      // Allow a provider's season-qualified title only when the mapped canonical title
+      // is a complete title component, not an arbitrary substring.
       if(targets.some(t=>n===t+" "+sn||n===sn+" "+t))identity=Math.max(identity,120);
       if(base&&(n===base||n.startsWith(base+" ")||n.endsWith(" "+base)))identity=Math.max(identity,75);
       if(sn&&sn!=="season "+seasonNo&&(n===sn||n.endsWith(" "+sn)||n.includes(" "+sn+" ")))seasonEvidence=Math.max(seasonEvidence,15);
@@ -224,7 +216,7 @@ function matchCard(cards,targetTitles,baseTitle,season=1,seasonName="",episodeTi
   scored.sort((a,b)=>b.score-a.score);
   if(!scored.length)return null;
   if(scored.length>1&&scored[0].score===scored[1].score)return null;
-  return||null;
+  return scored[0].slug||null;
 }
 
 function matchMovieCard(cards,targetTitles){
@@ -443,8 +435,7 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
 
   const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season,episode):null;
   if(tmdbInfo){
-    // ALWAYS USE CANONICAL TMDB TITLE
-    if(tmdbInfo.title) title = tmdbInfo.title;
+    if(tmdbInfo.title&&!title)title=tmdbInfo.title;
     if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
     seasonName=seasonName||tmdbInfo.seasonName||""
   }
@@ -502,16 +493,11 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
 
   if(parsed.masterUrl){
     seen.add(parsed.masterUrl);
-    const isDub = defaultFormat.toLowerCase().includes("dub") || defaultFormat.toLowerCase().includes("english");
-    const audioList = isDub ? ["English"] : ["Japanese"];
-    const subList = isDub ? [] : ["English"];
-    const seasonEp = movie ? "Movie" : `Season ${season} Episode ${episode}`;
-    
     streams.push({
       name:"AniZone",
-      title: buildStreamTitle(title, seasonEp, audioList, subList),
-      description: buildStreamTitle(title, seasonEp, audioList, subList),
+      title:title+" - Episode "+malEpisode+" ["+defaultServerName+" - "+defaultFormat+"]",
       url:parsed.masterUrl,
+      quality:"Multi",
       headers:HEADERS,
       subtitles:parsed.subtitles||[]
     })
@@ -588,18 +574,13 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
             const p=parseVidstack(html);
             if(!p.masterUrl||seen.has(p.masterUrl))return null;
 
-            const isDub = format.toLowerCase().includes("dub") || format.toLowerCase().includes("english");
-            const audioList = isDub ? ["English"] : ["Japanese"];
-            const subList = isDub ? [] : ["English"];
-            const seasonEp = movie ? "Movie" : `Season ${season} Episode ${episode}`;
-
             return{
               url:p.masterUrl,
               stream:{
                 name:"AniZone",
-                title: buildStreamTitle(title, seasonEp, audioList, subList),
-                description: buildStreamTitle(title, seasonEp, audioList, subList),
+                title:title+" - Episode "+malEpisode+" ["+serverName+" - "+format+"]",
                 url:p.masterUrl,
+                quality:"Multi",
                 headers:HEADERS,
                 subtitles:p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles||[]
               }

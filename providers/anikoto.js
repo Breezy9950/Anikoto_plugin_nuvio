@@ -7,7 +7,6 @@
 const BASE="https://anikototv.to";
 const AJAX=BASE+"/ajax";
 const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping";
-const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 const UA="Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro Build/AD1A.240418.003; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.54 Mobile Safari/537.36";
 const AJAX_HEADERS={
   "Referer":BASE+"/",
@@ -17,16 +16,6 @@ const AJAX_HEADERS={
 };
 
 function log(x){console.log("[Anikoto] "+x)}
-
-// ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
-    const lines = [];
-    if (mediaTitle) lines.push(mediaTitle);
-    if (seasonEpisode) lines.push(seasonEpisode);
-    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
-    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
-    return lines.join("\n");
-}
 
 class TTLCache{
   constructor(){this.m=new Map()}
@@ -62,15 +51,6 @@ async function getJson(url,opt,ms){
     return null
   }
 }
-
-// ---------- TMDB TITLE FETCHER ----------
-async function getTmdbTitle(tmdbId, mediaType) {
-  const type = mediaType === "movie" ? "movie" : "tv";
-  const url = "https://api.themoviedb.org/3/" + type + "/" + encodeURIComponent(tmdbId) + "?api_key=" + TMDB_API_KEY + "&language=en-US";
-  const d = await getJson(url, { headers: { "Accept": "application/json" } }, 3500);
-  return d ? (d.name || d.title || d.original_name || d.original_title || "") : "";
-}
-
 async function memo(key,ttl,fn){
   const hit=CACHE.get(key);
   if(hit!==undefined)return await Promise.resolve(hit);
@@ -820,7 +800,7 @@ function qualitySetting(settings){
 }
 
 /* ---------- Parallel server resolution ---------- */
-async function resolveServers(servers,quality,mediaTitle,season,episode){
+async function resolveServers(servers,quality){
   const started=Date.now(),state={firstStart:started,firstStreamLogged:false};
   const tasks=servers.map(server=>async()=>{
     const serverStarted=Date.now(),link=server&&server.link_id;
@@ -836,21 +816,10 @@ async function resolveServers(servers,quality,mediaTitle,season,episode){
     const stream=await extractHost(streamUrl,quality,String(server.srv_name||"Anikoto"));
     log("EXTRACT "+(host||"unknown")+" "+(Date.now()-extractStarted)+"ms");
     if(!stream)return null;
-    
-    // UI FORMATTING
-    const isDub = server.dataType === "dub";
-    const audioList = isDub ? ["English"] : ["Japanese"];
-    const subList = isDub ? [] : ["English"];
-    const seasonEp = season && episode ? `Season ${season} Episode ${episode}` : "";
-    
-    stream.name = "Anikoto";
-    stream.title = buildStreamTitle(mediaTitle, seasonEp, audioList, subList);
-    stream.description = stream.title;
+    stream.title="Anikoto "+(server.dataType==="dub"?"DUB":"SUB")+" - "+(server.srv_name||"Anikoto");
+    stream.name="Anikoto ["+(server.dataType==="dub"?"DUB":"SUB")+"] "+(server.srv_name||"Anikoto");
     stream.provider="anikoto";
     stream.type=streamType(stream.url);
-    // OMIT quality so client renders the title
-    delete stream.quality; 
-    
     if(!state.firstStreamLogged){
       state.firstStreamLogged=true;
       log("TIME TO FIRST STREAM "+(Date.now()-state.firstStart)+"ms");
@@ -861,10 +830,10 @@ async function resolveServers(servers,quality,mediaTitle,season,episode){
   log("SERVER/EXTRACTION TOTAL "+(Date.now()-started)+"ms");
   return out
 }
-async function resolveMode(episodeId,isDub,quality,mediaTitle,season,episode){
+async function resolveMode(episodeId,isDub,quality){
   const servers=(await getServerList(episodeId)).filter(x=>x.dataType===(isDub?"dub":"sub"));
   if(!servers.length)return[];
-  const streams=await resolveServers(servers,quality,mediaTitle,season,episode);
+  const streams=await resolveServers(servers,quality);
   const out=[],seen=new Set();
   for(const s of streams){
     if(!s||!validMediaUrl(s.url)||seen.has(s.url))continue;
@@ -898,12 +867,6 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         return[]
       }
       log("MAPPING HIT MAL="+mapping.malId+" E"+mapping.malEpisode);
-      
-      // FETCH CANONICAL TMDB TITLE
-      const tmdbTitle = await getTmdbTitle(id, type);
-      const displayTitle = tmdbTitle || mapping.title;
-      log("TITLE: "+displayTitle);
-      
       const searchStarted=Date.now();
       const anime=findAnime(mapping,mapSeason);
       const modesList=modes(settings);
@@ -919,6 +882,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       const episodes=await getEpisodes(animeId);
       let episodeMatch=episodes.find(x=>x.episodeNumber===mapping.malEpisode);
       if(!episodeMatch&&isMovie&&episodes.length===1){
+        // Some Anikoto movie pages expose a single episode that isn't numbered 1.
         episodeMatch=episodes[0];
         log("MOVIE SINGLE-EPISODE FALLBACK E"+episodeMatch.episodeNumber);
       }
@@ -932,7 +896,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       }
       log("EPISODE MATCH E"+episodeMatch.episodeNumber+" ID="+episodeMatch.episodeId);
       const modeResults=await Promise.all(
-        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings),displayTitle,s,e))
+        modesList.map(isDub=>resolveMode(episodeMatch.episodeId,isDub,qualitySetting(settings)))
       );
       const allStreams=modeResults.flat();
       const seen=new Set(),out=[];

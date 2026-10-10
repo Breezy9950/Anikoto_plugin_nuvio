@@ -11,32 +11,6 @@ const FLIX_HEADERS={"User-Agent":UA,"Accept":"*/*","Origin":FLIXCLOUD_BASE,"Refe
 
 function log(x){console.log("[Reanime] "+x)}
 
-// ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
-    const lines = [];
-    if (mediaTitle) lines.push(mediaTitle);
-    if (seasonEpisode) lines.push(seasonEpisode);
-    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
-    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
-    return lines.join("\n");
-}
-
-// ---------- CONCURRENCY LIMITER ----------
-async function limitConcurrency(tasks, limit) {
-  const results = [];
-  const executing = [];
-  for (const task of tasks) {
-    const p = Promise.resolve().then(() => task());
-    results.push(p);
-    if (limit <= tasks.length) {
-      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
-      executing.push(e);
-      if (executing.length >= limit) await Promise.race(executing);
-    }
-  }
-  return Promise.all(results);
-}
-
 class NuvioTTLCache{constructor(){this.m=new Map()}get(k){const x=this.m.get(k);if(!x)return;if(x.e<=Date.now()){this.m.delete(k);return}return x.v}set(k,v,ttl){this.m.set(k,{v,e:Date.now()+ttl});return v}delete(k){this.m.delete(k)}}
 const CACHE=globalThis.__NUVIO_PROVIDER_CACHE__||(globalThis.__NUVIO_PROVIDER_CACHE__=new NuvioTTLCache());
 
@@ -195,6 +169,9 @@ async function anilistDetails(alId){
 }
 
 async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,eligibility){
+  // Native fallback is permitted for confirmed anime. For movies, a mapper
+  // miss/timeout/unknown is NOT conclusive, so let the provider search itself.
+  // Only an explicit "non_anime" verdict blocks movies.
   const isMovie=mediaType==="movie";
   const allowNative=eligibility==="anime"||(isMovie&&eligibility!=="non_anime");
   if(!allowNative)return null;
@@ -219,47 +196,47 @@ async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,elig
   return{alId:candidate.anilistId,title:candidate.title||details.title||info.title,episode:targetEpisode,malId:null};
 }
 
-async function buildStreams(resolved,mediaType,season,episode,displayTitle){
+async function buildStreams(resolved,mediaType){
   const servers=await flixServers(resolved.alId,resolved.episode).catch(()=>null);
   if(!Array.isArray(servers)||!servers.length)return[];
   const subList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="sub");
   const dubList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="dub");
   const tasks=[];
-  
+  const displayTitle=resolved.title||"Anime";
   const queue=(list,lang)=>{
     if(!Array.isArray(list))return;
+    const langUpper=lang.toUpperCase();
     for(let i=0;i<list.length;i++){
       const sv=list[i];
       if(!sv||!sv.dataLink)continue;
-      
-      const isDub = lang === "dub";
-      const audioList = isDub ? ["English"] : ["Japanese"];
-      const subListFinal = isDub ? [] : ["English"];
-      const seasonEp = mediaType === "movie" ? "Movie" : `Season ${season} Episode ${episode}`;
-      
-      tasks.push(async () => {
+      const serverName=sv.serverName||("HD-"+(i+1));
+      const title=mediaType==="movie"
+        ?displayTitle+" ("+langUpper+")"
+        :displayTitle+" - Episode "+resolved.episode+" ("+langUpper+")";
+      tasks.push((async()=>{
         const dl=await extractFlix(sv.dataLink).catch(()=>null);
         if(!dl||!dl.url)return null;
-        
-        const streamTitle = buildStreamTitle(displayTitle, seasonEp, audioList, subListFinal);
-        
         return{
-          name: "Reanime",
-          title: streamTitle,
-          description: streamTitle,
-          url: dl.url,
-          provider: "reanime",
-          type: "mkv"
+          name:"Reanime ["+langUpper+"] "+serverName+" ("+(dl.quality||"1080p")+")",
+          title,
+          url:dl.url,
+          quality:dl.quality||"1080p",
+          size:dl.size||"Unknown",
+          headers:dl.headers,
+          provider:"reanime",
+          type:"mkv"
         }
-      });
+      })())
     }
   };
   queue(subList,"sub");
   queue(dubList,"dub");
   if(!tasks.length)return[];
-  const results=await limitConcurrency(tasks, 4);
+  const results=await Promise.all(tasks);
   const seen=new Set(),streams=[];
   for(const r of results)if(r&&r.url&&!seen.has(r.url)){seen.add(r.url);streams.push(r)}
+  const qr={"2160p":2160,"4k":2160,"1080p":1080,"720p":720,"480p":480,"360p":360};
+  streams.sort((a,b)=>(qr[(b.quality||"").toLowerCase()]||0)-(qr[(a.quality||"").toLowerCase()]||0));
   return streams
 }
 
@@ -272,6 +249,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
     const key="reanime:streams:"+id+":"+type+":"+s+":"+e;
     const hit=CACHE.get(key);if(hit!==undefined)return hit;
     const p=(async()=>{
+      // Prefetch TMDB info in parallel with mapper — only used if mapper misses.
       const tmdbPromise=tmdbInfo(id,type).catch(()=>null);
       let resolved=null,source="mapper",eligibility="unknown";
       try{
@@ -292,15 +270,9 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
           }else log("Mapper miss TMDB="+id+" S"+s+"E"+e+" eligibility="+eligibility);
         }
       }catch(err){log("Mapper error: "+err.message)}
-      
-      // ALWAYS USE TMDB CANONICAL TITLE
-      const tmdbInfo = await tmdbPromise;
-      let displayTitle = resolved ? resolved.title : "Anime";
-      if (tmdbInfo && tmdbInfo.title) displayTitle = tmdbInfo.title;
-      
       let streams=[];
       if(resolved){
-        try{streams=await timeout(buildStreams(resolved,type,s,e,displayTitle),10000)}
+        try{streams=await timeout(buildStreams(resolved,type),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
       const allowNativeFallback=eligibility==="anime"||(type==="movie"&&eligibility!=="non_anime");
@@ -310,7 +282,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         try{
           const info=await timeout(tmdbPromise,3500);
           const native=await timeout(resolveNative(id,type,s,e,info,eligibility),7000);
-          if(native){resolved=native;streams=await timeout(buildStreams(native,type,s,e,displayTitle),10000)}
+          if(native){resolved=native;streams=await timeout(buildStreams(native,type),10000)}
         }catch(err){log("Native error: "+err.message)}
       }
       log("Done streams="+streams.length+" src="+source);
