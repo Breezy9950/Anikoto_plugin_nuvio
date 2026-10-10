@@ -2,6 +2,19 @@ const API="https://api.animeonsen.xyz/v4",AUTH="https://auth.animeonsen.xyz/oaut
 const CLIENT_ID="f296be26-28b5-4358-b5a1-6259575e23b7",CLIENT_SECRET="349038c4157d0480784753841217270c3c5b35f4281eaee029de21cb04084235";
 let token=null,tokenExpiration=0,tokenPromise=null;
 function log(x){console.log("[AnimeOnsen] "+x)}
+
+// ---------- UI FORMATTING HELPER ----------
+function buildStreamTitle(providerName, mediaTitle, tags, size, audioList, subList) {
+    const lines = [];
+    if (providerName) lines.push(providerName);
+    if (mediaTitle) lines.push(mediaTitle);
+    if (tags && tags.length > 0) lines.push(tags.join(" • "));
+    if (size && size !== "0 B" && size !== "Unknown" && size !== "") lines.push(size);
+    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
+    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
+    return lines.join("\n");
+}
+
 class _NuvioTTLCache{constructor(){this.m=new Map()}get(k){const x=this.m.get(k);if(!x)return;if(x.expires<=Date.now()){this.m.delete(k);return}return x.value}set(k,v,ttl){this.m.set(k,{value:v,expires:Date.now()+ttl});return v}delete(k){this.m.delete(k)}}
 const _NUVIO_CACHE=globalThis.__NUVIO_PROVIDER_CACHE__||(globalThis.__NUVIO_PROVIDER_CACHE__=new _NuvioTTLCache());
 function _cacheGet(k){return _NUVIO_CACHE.get(k)}
@@ -20,5 +33,9 @@ function uniq(a){return[...new Set((a||[]).filter(Boolean).map(String))]}
 function normalize(s){return String(s||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g,"").trim()}
 async function findAnime(m){const queries=uniq([m.title,...m.titles]);if(!queries.length)return null;const key="animeonsen:find:"+queries.map(normalize).sort().join("|");return _memo(key,86400000,async()=>{const batches=await _settle(queries.map(q=>()=>search(q)),4500),all=[];for(const rs of batches)for(const x of rs||[])if(!all.some(y=>y.alias===x.alias))all.push(x);for(const q of queries){const exact=all.find(x=>x.name===q);if(exact)return exact}for(const q of queries){const n=normalize(q),exact=all.find(x=>normalize(x.name)===n);if(exact)return exact}return all[0]||null})}
 async function getEpisodes(alias){return _memo("animeonsen:episodes:"+alias,3600000,async()=>{const d=await api("/content/"+encodeURIComponent(alias)+"/episodes");if(!d||typeof d!=="object")return[];const out=[];for(const k of Object.keys(d)){const n=Number(k);if(!Number.isInteger(n)||n<1)continue;const x=d[k]||{};out.push({episodeNumber:n,episodeTitle:x.contentTitle_episode_en||null,episodeLink:n+"+"+alias})}return out.sort((a,b)=>a.episodeNumber-b.episodeNumber)})}
-async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1,key="animeonsen:resolved:"+id+":"+s+":"+e;if(_cacheGet(key)!==undefined)return _cacheGet(key);const p=(async()=>{const m=await mapping(id,s,e);if(!m){log("No mapping for TMDB="+id+" S"+s+"E"+e);return[]}const anime=await findAnime(m);if(!anime){log("AnimeOnsen search failed for "+m.title);return[]}log("Matched "+anime.name+" -> "+anime.alias);const eps=await getEpisodes(anime.alias),ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("Episode "+m.malEpisode+" not found for "+anime.name);return[]}const n=ep.episodeNumber,url=CDN+"/video/mp4-dash/"+encodeURIComponent(anime.alias)+"/"+encodeURIComponent(n)+"/manifest.mpd",subtitle=API+"/subtitles/"+encodeURIComponent(anime.alias)+"/en-US/"+encodeURIComponent(n),headers={"Referer":SITE+"/","User-Agent":UA};return[{name:"AnimeOnsen",title:"AnimeOnsen [DASH]",url,quality:"single",headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
+async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1,key="animeonsen:resolved:"+id+":"+s+":"+e;if(_cacheGet(key)!==undefined)return _cacheGet(key);const p=(async()=>{const m=await mapping(id,s,e);if(!m){log("No mapping for TMDB="+id+" S"+s+"E"+e);return[]}const anime=await findAnime(m);if(!anime){log("AnimeOnsen search failed for "+m.title);return[]}log("Matched "+anime.name+" -> "+anime.alias);const eps=await getEpisodes(anime.alias),ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("Episode "+m.malEpisode+" not found for "+anime.name);return[]}const n=ep.episodeNumber,url=CDN+"/video/mp4-dash/"+encodeURIComponent(anime.alias)+"/"+encodeURIComponent(n)+"/manifest.mpd",subtitle=API+"/subtitles/"+encodeURIComponent(anime.alias)+"/en-US/"+encodeURIComponent(n),headers={"Referer":SITE+"/","User-Agent":UA};
+      
+      const streamTitle = buildStreamTitle("AnimeOnsen", m.title || "Anime", ["DASH"], "", ["Japanese"], ["English"]);
+      
+      return[{name:"AnimeOnsen",title:streamTitle,url,quality:"single",headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
 module.exports={getStreams};
