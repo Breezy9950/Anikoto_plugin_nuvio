@@ -1,6 +1,6 @@
 {
   "name": "AniKoto-Nuvio",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "description": "AnimeOnsen, AniZone, AniKoto, Reanime, 4KHDHub and expanded anime streaming providers with shared subtitle support",
   "scrapers": [
     {
