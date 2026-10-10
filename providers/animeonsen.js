@@ -4,12 +4,10 @@ let token=null,tokenExpiration=0,tokenPromise=null;
 function log(x){console.log("[AnimeOnsen] "+x)}
 
 // ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(providerName, mediaTitle, tags, size, audioList, subList) {
+function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
     const lines = [];
-    if (providerName) lines.push(providerName);
     if (mediaTitle) lines.push(mediaTitle);
-    if (tags && tags.length > 0) lines.push(tags.join(" • "));
-    if (size && size !== "0 B" && size !== "Unknown" && size !== "") lines.push(size);
+    if (seasonEpisode) lines.push(seasonEpisode);
     if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
     if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
     return lines.join("\n");
@@ -35,7 +33,8 @@ async function findAnime(m){const queries=uniq([m.title,...m.titles]);if(!querie
 async function getEpisodes(alias){return _memo("animeonsen:episodes:"+alias,3600000,async()=>{const d=await api("/content/"+encodeURIComponent(alias)+"/episodes");if(!d||typeof d!=="object")return[];const out=[];for(const k of Object.keys(d)){const n=Number(k);if(!Number.isInteger(n)||n<1)continue;const x=d[k]||{};out.push({episodeNumber:n,episodeTitle:x.contentTitle_episode_en||null,episodeLink:n+"+"+alias})}return out.sort((a,b)=>a.episodeNumber-b.episodeNumber)})}
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){try{if(String(mediaType).toLowerCase()!=="tv")return[];const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1,key="animeonsen:resolved:"+id+":"+s+":"+e;if(_cacheGet(key)!==undefined)return _cacheGet(key);const p=(async()=>{const m=await mapping(id,s,e);if(!m){log("No mapping for TMDB="+id+" S"+s+"E"+e);return[]}const anime=await findAnime(m);if(!anime){log("AnimeOnsen search failed for "+m.title);return[]}log("Matched "+anime.name+" -> "+anime.alias);const eps=await getEpisodes(anime.alias),ep=eps.find(x=>x.episodeNumber===m.malEpisode);if(!ep){log("Episode "+m.malEpisode+" not found for "+anime.name);return[]}const n=ep.episodeNumber,url=CDN+"/video/mp4-dash/"+encodeURIComponent(anime.alias)+"/"+encodeURIComponent(n)+"/manifest.mpd",subtitle=API+"/subtitles/"+encodeURIComponent(anime.alias)+"/en-US/"+encodeURIComponent(n),headers={"Referer":SITE+"/","User-Agent":UA};
       
-      const streamTitle = buildStreamTitle("AnimeOnsen", m.title || "Anime", ["DASH"], "", ["Japanese"], ["English"]);
+      const seasonEp = `Season ${s} Episode ${e}`;
+      const streamTitle = buildStreamTitle(m.title || "Anime", seasonEp, ["Japanese"], ["English"]);
       
-      return[{name:"AnimeOnsen",title:streamTitle,url,quality:"single",headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
+      return[{name:"AnimeOnsen",title:streamTitle,description:streamTitle,url,quality:"single",headers,subtitle,subtitleFormat:"ASS",backup:false}]})();_cacheSet(key,p,1800000);try{const v=await p;if(v&&v.length)return _cacheSet(key,v,1800000);_NUVIO_CACHE.delete(key);return v}catch(err){_NUVIO_CACHE.delete(key);throw err}}catch(e){log("Fatal: "+e.message);return[]}}
 module.exports={getStreams};
