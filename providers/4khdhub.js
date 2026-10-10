@@ -44,34 +44,6 @@ var USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (
 var DOMAINS_URL = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json";
 var domainCache = { url: BASE_URL, ts: 0 };
 
-// ---------- UI FORMATTING HELPER ----------
-function buildStreamTitle(providerName, mediaTitle, tags, size, audioList, subList) {
-    const lines = [];
-    if (providerName) lines.push(providerName);
-    if (mediaTitle) lines.push(mediaTitle);
-    if (tags && tags.length > 0) lines.push(tags.join(" • "));
-    if (size && size !== "0 B" && size !== "Unknown" && size !== "") lines.push(size);
-    if (audioList && audioList.length > 0) lines.push("Audio: " + audioList.join(", "));
-    if (subList && subList.length > 0) lines.push("Subtitles: " + subList.join(", "));
-    return lines.join("\n");
-}
-
-// ---------- CONCURRENCY LIMITER ----------
-async function limitConcurrency(tasks, limit) {
-  const results = [];
-  const executing = [];
-  for (const task of tasks) {
-    const p = Promise.resolve().then(() => task());
-    results.push(p);
-    if (limit <= tasks.length) {
-      const e = p.then(() => executing.splice(executing.indexOf(e), 1));
-      executing.push(e);
-      if (executing.length >= limit) await Promise.race(executing);
-    }
-  }
-  return Promise.all(results);
-}
-
 function fetchLatestDomain() {
   return __async(this, null, function* () {
     const now = Date.now();
@@ -91,19 +63,13 @@ function fetchText(_0) {
   return __async(this, arguments, function* (url, options = {}) {
     const retries = options.retries !== void 0 ? options.retries : 2;
     const delay = options.delay !== void 0 ? options.delay : 1e3;
-    const timeoutMs = options.timeout || 8000;
     for (let i = 0; i <= retries; i++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = yield fetch(url, {
-          headers: __spreadValues({ "User-Agent": USER_AGENT }, options.headers),
-          signal: controller.signal
+          headers: __spreadValues({ "User-Agent": USER_AGENT }, options.headers)
         });
-        clearTimeout(timer);
         return yield response.text();
       } catch (err) {
-        clearTimeout(timer);
         console.log(`[4KHDHub] Request failed for ${url}: ${err.message}${i < retries ? `, retrying (${i + 1}/${retries})...` : ""}`);
       }
       if (i < retries) yield new Promise((r) => setTimeout(r, delay * Math.pow(2, i)));
@@ -433,8 +399,8 @@ function extractHblinks(hblinksUrl, baseMeta, depth) {
               }).attr("href");
               if (cloudLink) results.push(...(yield extractHubCloud(new URL(cloudLink, link).toString(), baseMeta)));
             }
-          } else if (/\.(m3u8|mpd|mp4|mkv)(?:$pad|\?)/i.test(link)) {
-            results.push({ source: "HStartblinks Direct(", url2: link,, meta: baseMeta });
+          } else if (/\.(m3u8|mpd|mp4|mkv)(?:$|\?)/i.test(link)) {
+            results.push({ source: "Hblinks Direct", url: link, meta: baseMeta });
           }
         } catch (e) {}
       }
@@ -460,7 +426,7 @@ function getStreams(tmdbId, type, season, episode, settings) {
     const itemsToProcess = [];
     if (isSeries && season && episode) {
       const seasonStr = "S" + String(season).padStart(2, "0");
-      const episodeStr = "Episode-" + String(episode). "0");
+      const episodeStr = "Episode-" + String(episode).padStart(2, "0");
       $(".episode-item").each((_, el) => {
         if ($(".episode-title", el).text().includes(seasonStr)) {
           $(".episode-download-item", el).filter((_2, item) => $(item).text().includes(episodeStr)).each((_2, item) => { itemsToProcess.push(item); });
@@ -474,8 +440,7 @@ function getStreams(tmdbId, type, season, episode, settings) {
     const seSuffix = isSeries && season && episode ? ` S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : "";
     const titleLine = `${title} (${year})${seSuffix}`;
 
-    // OPTIMIZATION: Use concurrency limiter instead of Promise.all over potentially hundreds of items
-    const tasks = itemsToProcess.map((item) => async () => {
+    const streamPromises = itemsToProcess.map((item) => __async(this, null, function* () {
       try {
         const sourceResult = yield extractSourceResults($, item);
         if (!sourceResult || !sourceResult.url) return [];
@@ -486,7 +451,8 @@ function getStreams(tmdbId, type, season, episode, settings) {
         return extractedLinks.map((link) => {
           const height = sourceResult.meta.height || 0;
           const qualityShort = height === 2160 ? "4K" : height ? height + "p" : "";
-          
+          const qualityFull = height === 2160 ? "2160p" : height ? height + "p" : "";
+
           const info = parseReleaseInfo(link.meta.title);
 
           const tagParts = [];
@@ -495,26 +461,25 @@ function getStreams(tmdbId, type, season, episode, settings) {
           if (info.codec) tagParts.push(info.codec);
           if (info.hdr) tagParts.push(info.hdr);
           if (info.dv) tagParts.push("DV");
-          
-          const sizeLine = formatBytes(link.meta.bytes || 0);
+          const tagLine = tagParts.join(" • ");
 
+          const sizeLine = formatBytes(link.meta.bytes || 0);
+          const audioLine = info.audio.length ? "Audio: " + info.audio.join(", ") : "";
+
+          const lines = [titleLine];
+          if (tagLine) lines.push(tagLine);
+          if (sizeLine && sizeLine !== "0 B") lines.push(sizeLine);
+          if (audioLine) lines.push(audioLine);
+          const description = lines.join("\n");
+
+          // Base name — rank prefix gets added later, after global sort
           const baseName = qualityShort ? `4KHDHub ${qualityShort}` : "4KHDHub";
-          
-          // UI FORMATTING: Build the ShowBox-style title
-          const streamTitle = buildStreamTitle(
-              baseName, 
-              titleLine, 
-              tagParts, 
-              sizeLine, 
-              info.audio, 
-              [] // 4KHDHub doesn't scrape subtitles
-          );
 
           return {
             name: baseName,
-            title: streamTitle,
-            size: sizeLine,
-            description: streamTitle,
+            title: description,
+            size: description,
+            description,
             url: link.url,
             __qr: height,
             __sb: link.meta.bytes || 0,
@@ -525,9 +490,9 @@ function getStreams(tmdbId, type, season, episode, settings) {
         console.log(`[4KHDHub] Item processing error: ${err.message}`);
         return [];
       }
-    });
+    }));
 
-    const results = yield limitConcurrency(tasks, 4); // Limit to 4 concurrent extractions
+    const results = yield Promise.all(streamPromises);
     const flat = results.reduce((acc, val) => acc.concat(val), []);
 
     // ---- Source filter ----
@@ -558,6 +523,8 @@ function getStreams(tmdbId, type, season, episode, settings) {
     }
 
    // ---- Assign invisible sort prefix using Unicode Variation Selectors ----
+    // VS1..VS16 (U+FE00-U+FE0F) + VS17..VS256 (U+E0100-U+E01EF) = 256 levels
+    // Invisible, zero-width, and their codepoints ascend with rank.
     for (let i = 0; i < deduped.length; i++) {
       const r = deduped[i];
       let prefix = "";
