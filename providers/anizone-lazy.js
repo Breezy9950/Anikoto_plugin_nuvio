@@ -310,28 +310,6 @@ async function getTmdbInfo(tmdbId,mediaType,season=1,episode=1){
   }
 }
 
-
-/* Plain numeric identifiers remain TMDB IDs. Explicit MAL IDs use mal:12345
-   or an object with mal_id/malId, avoiding ambiguous numeric-ID guessing. */
-function parseAnimeIdentifier(value){
-  if(value&&typeof value==="object"){
-    const mal=value.mal_id??value.malId??(String(value.idType||value.id_type||"").toLowerCase()==="mal"?value.id:null);
-    if(mal!=null&&/^\d{1,10}$/.test(String(mal).trim())&&Number(mal)>0)return{kind:"mal",id:String(mal).trim()};
-    const tmdb=value.tmdb_id??value.tmdbId??value.id;
-    return tmdb==null?{kind:"invalid",id:""}:{kind:"tmdb",id:String(tmdb).trim()};
-  }
-  const raw=String(value||"").trim(),m=raw.match(/^(?:mal|mal_id|malid)\s*[:#/]\s*(\d{1,10})$/i);
-  if(m&&Number(m[1])>0)return{kind:"mal",id:m[1]};
-  return raw?{kind:"tmdb",id:raw}:{kind:"invalid",id:""};
-}
-async function malMetadata(malId,episode){
-  const d=await json("https://api.jikan.moe/v4/anime/"+encodeURIComponent(malId)+"/full",{headers:{"Accept":"application/json","User-Agent":HEADERS["User-Agent"]}},7000);
-  const a=d&&d.data;if(!a||String(a.mal_id||"")!==String(malId))return null;
-  const ep=Number(episode);if(!Number.isInteger(ep)||ep<1||(Number(a.episodes)>0&&ep>Number(a.episodes)))return null;
-  const titles=[a.title_english,a.title,a.title_japanese,...(Array.isArray(a.title_synonyms)?a.title_synonyms:[]),...(Array.isArray(a.titles)?a.titles.map(x=>x&&x.title):[])].filter(Boolean).map(String);
-  return{mal_id:String(malId),mal_episode:ep,anime_title:String(a.title_english||a.title||a.title_japanese||""),title:String(a.title_english||a.title||a.title_japanese||""),titles:[...new Set(titles)],directMal:true};
-}
-
 async function dbMapping(tmdbId,season,episode){
   tmdbId=String(tmdbId||"").trim();
   season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
@@ -403,26 +381,23 @@ function cleanQuery(s){
 }
 
 async function resolveStream(tmdbId,mediaType,season,episode,settings){
-  const identifier=parseAnimeIdentifier(tmdbId);
-  tmdbId=identifier.id;
+  tmdbId=String(tmdbId||"").trim();
   mediaType=String(mediaType||"tv").toLowerCase();
   season=Number.isInteger(Number(season))&&Number(season)>=0?Number(season):1;
   episode=Number(episode)||1;
-  if(!tmdbId||identifier.kind==="invalid"||(identifier.kind==="mal"&&mediaType!=="tv")){
-    console.log("[AniZone Lazy] ABORT INVALID IDENTIFIER OR MEDIA TYPE");
+  if(!tmdbId){
+    console.log("[AniZone Lazy] ABORT EMPTY TMDB ID");
     return[]
   }
 
-  console.log("[AniZone Lazy] REQUEST",{identifier:identifier.kind,id:tmdbId,mediaType,season,episode});
+  console.log("[AniZone Lazy] REQUEST",{tmdbId,mediaType,season,episode});
 
   const movie=mediaType==="movie";
   let mappingResult=null,title="",altTitles=[],targetTitles=[],malEpisode=movie?1:episode,imdbId="",malId="",seasonName="";
 
   if(!movie){
-    if(identifier.kind==="mal")mappingResult={mapping:await malMetadata(tmdbId,episode),fromDb:false,state:null};
-    else mappingResult=await dbMapping(tmdbId,season,episode);
+    mappingResult=await dbMapping(tmdbId,season,episode);
     if(!mappingResult||!mappingResult.mapping){
-      if(identifier.kind==="mal"){console.log("[AniZone Lazy] MAL ID OR EPISODE NOT FOUND",tmdbId,episode);return[]}
       const autoPopulate=!["false","0","disabled","off"].includes(String(getSetting(settings,["autoPopulateMissingMappings","auto_populate_missing_mappings","autoPopulate","autoPopulateMappings"],"enabled")).toLowerCase());
       if(!autoPopulate){
         console.log("[AniZone Lazy] AUTO POPULATION DISABLED — READ ONLY");
@@ -458,7 +433,7 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
     if(info.originalTitle&&normalize(info.originalTitle)!==normalize(title))altTitles.push(info.originalTitle)
   }
 
-  const tmdbInfo=!movie&&identifier.kind!=="mal"?await getTmdbInfo(tmdbId,"tv",season,episode):null;
+  const tmdbInfo=!movie?await getTmdbInfo(tmdbId,"tv",season,episode):null;
   if(tmdbInfo){
     if(tmdbInfo.title&&!title)title=tmdbInfo.title;
     if(tmdbInfo.originalTitle&&normalize(tmdbInfo.originalTitle)!==normalize(title))altTitles.push(tmdbInfo.originalTitle);
@@ -485,7 +460,7 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
   }
 
   const seasonEvidence=tmdbInfo&&tmdbInfo.episodeTitle||"";
-  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,identifier.kind==="mal"?null:season,seasonName,seasonEvidence);
+  const slug=movie?matchMovieCard(cards,specific):matchCard(cards,specific,base,season,seasonName,seasonEvidence);
 
   if(!slug){
     console.log("[AniZone Lazy] CARD NOT FOUND",{title,season,results:cards.length});

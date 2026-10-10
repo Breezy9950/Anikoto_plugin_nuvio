@@ -14,7 +14,7 @@ function log(x){console.log("[Reanime] "+x)}
 class NuvioTTLCache{constructor(){this.m=new Map()}get(k){const x=this.m.get(k);if(!x)return;if(x.e<=Date.now()){this.m.delete(k);return}return x.v}set(k,v,ttl){this.m.set(k,{v,e:Date.now()+ttl});return v}delete(k){this.m.delete(k)}}
 const CACHE=globalThis.__NUVIO_PROVIDER_CACHE__||(globalThis.__NUVIO_PROVIDER_CACHE__=new NuvioTTLCache());
 
-async function memo(key,ttl,fn){const hit=CACHE.get(key);if(hit!==undefined)return hit;const p=Promise.resolve().then(fn);CACHE.set(key,p,ttl);try{const v=await p;if(v===null||v===undefined){CACHE.delete(key);return v}CACHE.set(key,v,ttl);return v}catch(e){CACHE.delete(key);throw e}}
+async function memo(key,ttl,fn){const hit=CACHE.get(key);if(hit!==undefined)return hit;const p=Promise.resolve().then(fn);CACHE.set(key,p,ttl);try{const v=await p;CACHE.set(key,v,ttl);return v}catch(e){CACHE.delete(key);throw e}}
 
 async function timeout(p,ms){let t;try{return await Promise.race([p,new Promise((_,r)=>t=setTimeout(()=>r(new Error("timeout")),ms))])}finally{clearTimeout(t)}}
 
@@ -38,21 +38,6 @@ async function reanimeReq(path,opt,ms){
   return null
 }
 
-
-/* Numeric IDs are treated as TMDB for compatibility. Use mal:12345 or
-   {mal_id:12345} for explicit MyAnimeList identifiers. */
-function parseAnimeIdentifier(value){
-  if(value&&typeof value==="object"){
-    const mal=value.mal_id??value.malId??(String(value.idType||value.id_type||"").toLowerCase()==="mal"?value.id:null);
-    if(mal!=null&&/^\d{1,10}$/.test(String(mal).trim())&&Number(mal)>0)return{kind:"mal",id:String(mal).trim()};
-    const tmdb=value.tmdb_id??value.tmdbId??value.id;
-    return tmdb==null?{kind:"invalid",id:""}:{kind:"tmdb",id:String(tmdb).trim()};
-  }
-  const raw=String(value||"").trim(),m=raw.match(/^(?:mal|mal_id|malid)\s*[:#/]\s*(\d{1,10})$/i);
-  if(m&&Number(m[1])>0)return{kind:"mal",id:m[1]};
-  return raw?{kind:"tmdb",id:raw}:{kind:"invalid",id:""};
-}
-
 // ---------- Primary: mapper (read-only, no population trigger) ----------
 async function mapperLookup(tmdbId,season,episode){
   const u=MAPPING_URL+"?tmdb_id="+encodeURIComponent(tmdbId)+"&tmdbId="+encodeURIComponent(tmdbId)+"&season="+season+"&episode="+episode+"&pending=1";
@@ -67,7 +52,7 @@ async function mapperLookup(tmdbId,season,episode){
 
 async function malToAnilist(malId){
   return memo("reanime:mal2al:"+malId,604800000,async()=>{
-    const q="query($idMal:Int){Media(idMal:$idMal,type:ANIME){id episodes title{english romaji native}}}";
+    const q="query($idMal:Int){Media(idMal:$idMal,type:ANIME){id title{english romaji native}}}";
     const d=await json(ANILIST_URL,{
       method:"POST",
       headers:Object.assign({},HEADERS,{"Content-Type":"application/json"}),
@@ -75,7 +60,7 @@ async function malToAnilist(malId){
     },3500);
     if(!d||!d.data||!d.data.Media||!d.data.Media.id)return null;
     const t=d.data.Media.title||{};
-    return{id:d.data.Media.id,title:t.english||t.romaji||t.native||"",episodes:Number(d.data.Media.episodes)||0}
+    return{id:d.data.Media.id,title:t.english||t.romaji||t.native||""}
   })
 }
 
@@ -86,38 +71,24 @@ async function flixServers(anilistId,episode){
     const r=await reanimeReq(path,{headers:HEADERS},3500);
     if(!r)return null;
     let d;try{d=await r.json()}catch(e){return null}
-    if(!d||!Array.isArray(d.servers)||d.success===false)return null;
+    if(!d||!d.success||!Array.isArray(d.servers))return null;
     return d.servers
   })
 }
 
 async function extractFlix(embedUrl){
-  let embed;try{embed=new URL(String(embedUrl||""))}catch(e){return null}
-  const match=embed.pathname.match(/\/(?:e|embed)\/([a-z0-9_-]+)/i);
-  if(!match)return null;
-  const aid=match[1];
-  const t=await text(FLIXCLOUD_BASE+"/d/"+encodeURIComponent(aid)+"/__data.json",{headers:Object.assign({},FLIX_HEADERS,{Referer:embed.origin+"/"})},7000);
+  const m=String(embedUrl||"").match(/\/e\/([a-z0-9]+)/i);
+  if(!m)return null;
+  const aid=m[1];
+  const t=await text(FLIXCLOUD_BASE+"/d/"+aid+"/__data.json",{headers:FLIX_HEADERS},5000);
   if(!t)return null;
-  // FlixCloud's payload has changed between serialized JSON and HTML-like
-  // hydration output. Search both raw and safely decoded representations.
-  let decoded=t,parsed=null;
-  try{parsed=JSON.parse(t);decoded+="\n"+JSON.stringify(parsed)}catch(e){}
-  decoded=decoded.replace(/\\u0022/gi,'"').replace(/\\\\\\/g,"/").replace(/\\\\"/g,'"');
-  const values=[];
-  const walk=(v,key="")=>{if(v==null)return;if(typeof v==="string"){values.push({key,value:v});return}if(Array.isArray(v)){for(const x of v)walk(x,key);return}if(typeof v==="object"){for(const [k,x] of Object.entries(v))walk(x,k)}};
-  if(parsed)walk(parsed);
-  const propertyValue=(re)=>{const x=values.find(x=>re.test(x.key)&&x.value);return x&&x.value};
-  const uuid=/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const jwt=/eyJ[\w-]+\.[\w-]+\.[\w-]+/;
-  const fileId=(String(propertyValue(/^(?:file.?id|uuid|id)$/i)||"").match(uuid)||decoded.match(uuid)||[])[0];
-  const token=(String(propertyValue(/^(?:token|jwt|access.?token)$/i)||"").match(jwt)||decoded.match(jwt)||[])[0];
+  const fileId=(t.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)||[])[0];
+  const token=(t.match(/eyJ[\w-]+\.[\w-]+\.[\w-]+/)||[])[0];
   if(!fileId||!token)return null;
-  const base=(decoded.match(/https:\/\/[a-z0-9.-]+\.flixcloud\.cc/i)||[])[0]||FLIXCLOUD_BASE;
-  const q=(decoded.match(/(\d{3,4}p)/i)||[])[0]||"1080p";
-  const size=(decoded.match(/"(\d+(?:\.\d+)?\s*[KMG]B)"/i)||[])[1]||"Unknown";
-  let url;try{url=new URL("/download/"+fileId,base);url.searchParams.set("token",token)}catch(e){return null}
-  const headers={"User-Agent":UA,"Accept":"*/*","Origin":embed.origin,"Referer":embed.toString()};
-  return{url:url.toString(),quality:q,size,headers}
+  const base=(t.match(/https:\/\/[a-z0-9-]+\.flixcloud\.cc/i)||[])[0]||FLIXCLOUD_BASE;
+  const q=(t.match(/(\d{3,4}p)/)||[])[0]||"1080p";
+  const size=(t.match(/"(\d+(?:\.\d+)?\s*[KMG]B)"/i)||[])[1]||"Unknown";
+  return{url:base+"/download/"+fileId+"?token="+token,quality:q,size,headers:FLIX_HEADERS}
 }
 
 // ---------- Fallback: reanime native search ----------
@@ -198,10 +169,13 @@ async function anilistDetails(alId){
 }
 
 async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,eligibility){
-  // Native fallback is permitted only for confirmed anime. A mapping miss or a
-  // timeout is not itself evidence of anime eligibility.
-  if(eligibility!=="anime")return null;
-  if(mediaType!=="movie"&&Number(season)!==1)return null;
+  // Native fallback is permitted for confirmed anime. For movies, a mapper
+  // miss/timeout/unknown is NOT conclusive, so let the provider search itself.
+  // Only an explicit "non_anime" verdict blocks movies.
+  const isMovie=mediaType==="movie";
+  const allowNative=eligibility==="anime"||(isMovie&&eligibility!=="non_anime");
+  if(!allowNative)return null;
+  if(!isMovie&&Number(season)!==1)return null;
   const info=prefetchedInfo||await tmdbInfo(tmdbId,mediaType);
   if(!info||!info.title)return null;
   const queries=[info.title];
@@ -225,9 +199,8 @@ async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,elig
 async function buildStreams(resolved,mediaType){
   const servers=await flixServers(resolved.alId,resolved.episode).catch(()=>null);
   if(!Array.isArray(servers)||!servers.length)return[];
-  const audioKind=s=>{const v=String(s&& (s.dataType||s.type||s.language)||"").toLowerCase();if(/^(sub|subbed|subtitle|jpn|ja)$/.test(v))return"sub";if(/^(dub|dubbed|english|eng|en)$/.test(v))return"dub";return""};
-  const subList=servers.filter(s=>audioKind(s)==="sub");
-  const dubList=servers.filter(s=>audioKind(s)==="dub");
+  const subList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="sub");
+  const dubList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="dub");
   const tasks=[];
   const displayTitle=resolved.title||"Anime";
   const queue=(list,lang)=>{
@@ -269,25 +242,17 @@ async function buildStreams(resolved,mediaType){
 
 async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
-    const type=String(mediaType||"tv").toLowerCase(),identifier=parseAnimeIdentifier(tmdbId),id=identifier.id;
-    if(!id||identifier.kind==="invalid"||(identifier.kind==="mal"&&type!=="tv"))return[];
+    const type=String(mediaType||"tv").toLowerCase(),id=String(tmdbId||"").trim();
+    if(!id)return[];
     const s=Number(season)||1,e=Number(episode)||1;
-    if(!Number.isInteger(e)||e<1||e>100000)return[];
     const mapSeason=type==="movie"?1:s,mapEpisode=type==="movie"?1:e;
-    const key="reanime:streams:"+identifier.kind+":"+id+":"+type+":"+s+":"+e;
+    const key="reanime:streams:"+id+":"+type+":"+s+":"+e;
     const hit=CACHE.get(key);if(hit!==undefined)return hit;
     const p=(async()=>{
-      // Direct MAL requests skip TMDB mapping entirely; the requested episode is
-      // interpreted as a MAL episode number for that exact MAL anime entry.
-      const tmdbPromise=identifier.kind==="mal"?Promise.resolve(null):tmdbInfo(id,type).catch(()=>null);
-      let resolved=null,source=identifier.kind==="mal"?"mal":"mapper",eligibility=identifier.kind==="mal"?"anime":"unknown";
+      // Prefetch TMDB info in parallel with mapper — only used if mapper misses.
+      const tmdbPromise=tmdbInfo(id,type).catch(()=>null);
+      let resolved=null,source="mapper",eligibility="unknown";
       try{
-        if(identifier.kind==="mal") {
-          const al=await timeout(malToAnilist(id),5000);
-          if(al&&(!al.episodes||e<=al.episodes))resolved={alId:al.id,title:al.title||"MAL "+id,episode:e,malId:id};
-          else if(al)log("Requested MAL episode exceeds AniList episode count MAL="+id+" E"+e+" total="+al.episodes);
-          else log("Direct MAL->AniList resolution failed MAL="+id);
-        } else {
         const m=await timeout(mapperLookup(id,mapSeason,mapEpisode),5000);
         if(m){
           eligibility=m.eligibility||"unknown";
@@ -304,15 +269,15 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
             }else log("Mapper hit but MAL->AL failed MAL="+m.malId);
           }else log("Mapper miss TMDB="+id+" S"+s+"E"+e+" eligibility="+eligibility);
         }
-        }
-      }catch(err){log("Identifier resolution error: "+err.message)}
+      }catch(err){log("Mapper error: "+err.message)}
       let streams=[];
       if(resolved){
         try{streams=await timeout(buildStreams(resolved,type),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
-      if(!streams.length&&eligibility==="anime"&&identifier.kind!=="mal"){
-        log("Trying strict native fallback for confirmed anime");
+      const allowNativeFallback=eligibility==="anime"||(type==="movie"&&eligibility!=="non_anime");
+      if(!streams.length&&allowNativeFallback){
+        log("Trying native fallback (eligibility="+eligibility+", type="+type+")");
         source="native";
         try{
           const info=await timeout(tmdbPromise,3500);
