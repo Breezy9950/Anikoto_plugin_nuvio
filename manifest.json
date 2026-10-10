@@ -1,7 +1,7 @@
 {
   "name": "AniKoto-Nuvio",
-  "version": "1.6.0",
-  "description": "AnimeOnsen, AniZone, Anikoto and Reanime providers with database-first unified mapping and original stream extraction",
+  "version": "1.8.0",
+  "description": "AnimeOnsen, AniZone, AniKoto, Reanime, 4KHDHub and additional direct anime streaming providers",
   "scrapers": [
     {
       "id": "animeonsen",
@@ -10,11 +10,19 @@
       "version": "1.1.0",
       "author": "Nuvio Team",
       "filename": "providers/animeonsen.js",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "enabled": true,
-      "formats": ["mpd"],
+      "formats": [
+        "mpd"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=animeonsen.xyz&sz=128",
-      "contentLanguage": ["en", "ja"]
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
       "id": "anikoto",
@@ -23,11 +31,20 @@
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/anikoto.js",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "enabled": true,
-      "formats": ["m3u8", "mp4"],
+      "formats": [
+        "m3u8",
+        "mp4"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=anikototv.to&sz=128",
-      "contentLanguage": ["en", "ja"]
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
       "id": "anizone-lazy",
@@ -37,11 +54,19 @@
       "author": "Nuvio Team",
       "filename": "providers/anizone-lazy.js",
       "hasSettings": true,
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "enabled": true,
-      "formats": ["m3u8"],
+      "formats": [
+        "m3u8"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=anizone.to&sz=128",
-      "contentLanguage": ["en", "ja"]
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
       "id": "reanime",
@@ -50,32 +75,183 @@
       "version": "1.0.0",
       "author": "Nuvio Team",
       "filename": "providers/reanime.js",
-      "supportedTypes": ["movie", "tv"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "enabled": true,
-      "formats": ["mkv"],
+      "formats": [
+        "mkv"
+      ],
       "logo": "https://www.google.com/s2/favicons?domain=reanime.to&sz=128",
-      "contentLanguage": ["en", "ja"]
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
     },
     {
-  "id": "4khdhub",
-  "name": "4KHDHub",
-  "description": "4KHDHub direct links",
-  "version": "1.0.3",
-  "author": "Nuvio Team",
-  "supportedTypes": [
-    "movie",
-    "tv"
-  ],
-  "filename": "providers/4khdhub.js",
-  "enabled": true,
-  "hasSettings": true,
-  "formats": [
-    "mkv"
-  ],
-  "logo": "https://www.google.com/s2/favicons?domain=4khdhub.click&sz=128",
-  "contentLanguage": [
-    "en"
-  ]
-}
+      "id": "4khdhub",
+      "name": "4KHDHub",
+      "description": "4KHDHub direct links",
+      "version": "1.0.3",
+      "author": "Nuvio Team",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
+      "filename": "providers/4khdhub.js",
+      "enabled": true,
+      "hasSettings": true,
+      "formats": [
+        "mkv"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=4khdhub.click&sz=128",
+      "contentLanguage": [
+        "en"
+      ]
+    },
+    {
+      "id": "kaa",
+      "name": "Kaa",
+      "description": "Kaa.lt direct HLS provider with embedded-player extraction and subtitles",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/kaa.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=kaa.lt&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "animegg",
+      "name": "AnimeGG",
+      "description": "AnimeGG direct MP4/HLS mirrors with title matching and quality labels",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/animegg.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "mp4",
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=animegg.org&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "megavid",
+      "name": "MegaVid",
+      "description": "MegaVid/Vidy direct HLS/MP4 resolver with AniList and MAL identifier fallback",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/megavid.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8",
+        "mp4"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=megavid.buzz&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "vidnest",
+      "name": "VidNest",
+      "description": "VidNest direct HLS resolver with subtitle track extraction",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/vidnest.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=vidnest.fun&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "nin",
+      "name": "NiN",
+      "description": "Supaplay/NiN direct HLS resolver with dual API path fallback",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/nin.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=supaplay.fun&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "zoko",
+      "name": "Zoko",
+      "description": "ZokoAnime HLS resolver with in-page payload decoding and subtitles",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/zoko.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=zokoanime.video&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    },
+    {
+      "id": "lee",
+      "name": "Lee",
+      "description": "ani.pm direct HLS/MP4 resolver with sub/dub availability and subtitle extraction",
+      "version": "1.0.0",
+      "author": "Nuvio Team",
+      "filename": "providers/lee.js",
+      "supportedTypes": [
+        "tv"
+      ],
+      "enabled": true,
+      "formats": [
+        "m3u8",
+        "mp4"
+      ],
+      "logo": "https://www.google.com/s2/favicons?domain=ani.pm&sz=128",
+      "contentLanguage": [
+        "en",
+        "ja"
+      ]
+    }
   ]
 }
