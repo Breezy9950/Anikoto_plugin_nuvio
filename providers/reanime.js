@@ -169,13 +169,10 @@ async function anilistDetails(alId){
 }
 
 async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,eligibility){
-  // Native fallback is permitted for confirmed anime. For movies, a mapper
-  // miss/timeout/unknown is NOT conclusive, so let the provider search itself.
-  // Only an explicit "non_anime" verdict blocks movies.
-  const isMovie=mediaType==="movie";
-  const allowNative=eligibility==="anime"||(isMovie&&eligibility!=="non_anime");
-  if(!allowNative)return null;
-  if(!isMovie&&Number(season)!==1)return null;
+  // Native fallback is permitted only for confirmed anime. A mapping miss or a
+  // timeout is not itself evidence of anime eligibility.
+  if(eligibility!=="anime")return null;
+  if(mediaType!=="movie"&&Number(season)!==1)return null;
   const info=prefetchedInfo||await tmdbInfo(tmdbId,mediaType);
   if(!info||!info.title)return null;
   const queries=[info.title];
@@ -275,9 +272,8 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         try{streams=await timeout(buildStreams(resolved,type),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
-      const allowNativeFallback=eligibility==="anime"||(type==="movie"&&eligibility!=="non_anime");
-      if(!streams.length&&allowNativeFallback){
-        log("Trying native fallback (eligibility="+eligibility+", type="+type+")");
+      if(!streams.length&&eligibility==="anime"){
+        log("Trying strict native fallback for confirmed anime");
         source="native";
         try{
           const info=await timeout(tmdbPromise,3500);
