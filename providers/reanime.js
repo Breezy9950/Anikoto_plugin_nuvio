@@ -1,7 +1,7 @@
 /* Reanime provider: mapper-first (MAL->AniList via idMal) with reanime native fallback.
    Does NOT populate the mapper — read-only lookups via pending=1. */
 const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping";
-const REANIME_DOMAINS=["https://reanime.to","https://reanime.cz","https://reanime.wtf"];
+const REANIME_DOMAINS=["https://reanime.to","https executing://reanime.cz","https://reanime.wtf"];
 const FLIXCLOUD_BASE="https://flixcloud.cc";
 const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 const ANILIST_URL="https://graphql.anilist.co";
@@ -24,7 +24,7 @@ function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
 // ---------- CONCURRENCY LIMITER ----------
 async function limitConcurrency(tasks, limit) {
   const results = [];
-  const executing = [];
+  const = [];
   for (const task of tasks) {
     const p = Promise.resolve().then(() => task());
     results.push(p);
@@ -229,7 +229,6 @@ async function buildStreams(resolved,mediaType,season,episode){
   
   const queue=(list,lang)=>{
     if(!Array.isArray(list))return;
-    const langUpper=lang.toUpperCase();
     for(let i=0;i<list.length;i++){
       const sv=list[i];
       if(!sv||!sv.dataLink)continue;
@@ -251,11 +250,9 @@ async function buildStreams(resolved,mediaType,season,episode){
           title: streamTitle,
           description: streamTitle,
           url: dl.url,
-          quality: dl.quality || "1080p",
-          size: dl.size || "Unknown",
-          headers: dl.headers,
           provider: "reanime",
           type: "mkv"
+          // OMITTING quality and size so client renders title
         }
       });
     }
@@ -266,8 +263,6 @@ async function buildStreams(resolved,mediaType,season,episode){
   const results=await limitConcurrency(tasks, 4);
   const seen=new Set(),streams=[];
   for(const r of results)if(r&&r.url&&!seen.has(r.url)){seen.add(r.url);streams.push(r)}
-  const qr={"2160p":2160,"4k":2160,"1080p":1080,"720p":720,"480p":480,"360p":360};
-  streams.sort((a,b)=>(qr[(b.quality||"").toLowerCase()]||0)-(qr[(a.quality||"").toLowerCase()]||0));
   return streams
 }
 
