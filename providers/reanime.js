@@ -1,7 +1,7 @@
 /* Reanime provider: mapper-first (MAL->AniList via idMal) with reanime native fallback.
    Does NOT populate the mapper — read-only lookups via pending=1. */
 const MAPPING_URL="https://anikoto-nuvio.netlify.app/.netlify/functions/anime-lazy-mapping";
-const REANIME_DOMAINS=["https://reanime.to","https executing://reanime.cz","https://reanime.wtf"];
+const REANIME_DOMAINS=["https://reanime.to","https://reanime.cz","https://reanime.wtf"];
 const FLIXCLOUD_BASE="https://flixcloud.cc";
 const TMDB_API_KEY="68e094699525b18a70bab2f86b1fa706";
 const ANILIST_URL="https://graphql.anilist.co";
@@ -24,7 +24,7 @@ function buildStreamTitle(mediaTitle, seasonEpisode, audioList, subList) {
 // ---------- CONCURRENCY LIMITER ----------
 async function limitConcurrency(tasks, limit) {
   const results = [];
-  const = [];
+  const executing = [];
   for (const task of tasks) {
     const p = Promise.resolve().then(() => task());
     results.push(p);
@@ -219,13 +219,12 @@ async function resolveNative(tmdbId,mediaType,season,episode,prefetchedInfo,elig
   return{alId:candidate.anilistId,title:candidate.title||details.title||info.title,episode:targetEpisode,malId:null};
 }
 
-async function buildStreams(resolved,mediaType,season,episode){
+async function buildStreams(resolved,mediaType,season,episode,displayTitle){
   const servers=await flixServers(resolved.alId,resolved.episode).catch(()=>null);
   if(!Array.isArray(servers)||!servers.length)return[];
   const subList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="sub");
   const dubList=servers.filter(s=>s&&s.dataType&&String(s.dataType).toLowerCase()==="dub");
   const tasks=[];
-  const displayTitle=resolved.title||"Anime";
   
   const queue=(list,lang)=>{
     if(!Array.isArray(list))return;
@@ -238,7 +237,6 @@ async function buildStreams(resolved,mediaType,season,episode){
       const subListFinal = isDub ? [] : ["English"];
       const seasonEp = mediaType === "movie" ? "Movie" : `Season ${season} Episode ${episode}`;
       
-      // FIX: Push a function that returns a Promise
       tasks.push(async () => {
         const dl=await extractFlix(sv.dataLink).catch(()=>null);
         if(!dl||!dl.url)return null;
@@ -252,7 +250,6 @@ async function buildStreams(resolved,mediaType,season,episode){
           url: dl.url,
           provider: "reanime",
           type: "mkv"
-          // OMITTING quality and size so client renders title
         }
       });
     }
@@ -295,9 +292,15 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
           }else log("Mapper miss TMDB="+id+" S"+s+"E"+e+" eligibility="+eligibility);
         }
       }catch(err){log("Mapper error: "+err.message)}
+      
+      // ALWAYS USE TMDB CANONICAL TITLE
+      const tmdbInfo = await tmdbPromise;
+      let displayTitle = resolved ? resolved.title : "Anime";
+      if (tmdbInfo && tmdbInfo.title) displayTitle = tmdbInfo.title;
+      
       let streams=[];
       if(resolved){
-        try{streams=await timeout(buildStreams(resolved,type,s,e),10000)}
+        try{streams=await timeout(buildStreams(resolved,type,s,e,displayTitle),10000)}
         catch(err){log("Mapper streams error: "+err.message)}
       }
       const allowNativeFallback=eligibility==="anime"||(type==="movie"&&eligibility!=="non_anime");
@@ -307,7 +310,7 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
         try{
           const info=await timeout(tmdbPromise,3500);
           const native=await timeout(resolveNative(id,type,s,e,info,eligibility),7000);
-          if(native){resolved=native;streams=await timeout(buildStreams(native,type,s,e),10000)}
+          if(native){resolved=native;streams=await timeout(buildStreams(native,type,s,e,displayTitle),10000)}
         }catch(err){log("Native error: "+err.message)}
       }
       log("Done streams="+streams.length+" src="+source);
