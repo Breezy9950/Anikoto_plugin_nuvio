@@ -827,6 +827,7 @@ async function resolveServers(servers,quality,mediaTitle,season,episode){
     log("EXTRACT "+(host||"unknown")+" "+(Date.now()-extractStarted)+"ms");
     if(!stream)return null;
     
+    // UI FORMATTING
     const isDub = server.dataType === "dub";
     const audioList = isDub ? ["English"] : ["Japanese"];
     const subList = isDub ? [] : ["English"];
@@ -837,6 +838,9 @@ async function resolveServers(servers,quality,mediaTitle,season,episode){
     stream.description = stream.title;
     stream.provider="anikoto";
     stream.type=streamType(stream.url);
+    // OMIT quality so client renders the title
+    delete stream.quality; 
+    
     if(!state.firstStreamLogged){
       state.firstStreamLogged=true;
       log("TIME TO FIRST STREAM "+(Date.now()-state.firstStart)+"ms");
