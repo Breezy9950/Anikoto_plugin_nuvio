@@ -245,10 +245,7 @@ function parseVidstack(html){
         .map(s=>({
           url:String(s.file||"").replace(/\\/g,""),
           name:s.title||s.language||"English",
-          language:s.language||"en",
-          format:/\.ass(?:[?#]|$)/i.test(String(s.file||""))?"ass":/\.vtt(?:[?#]|$)/i.test(String(s.file||""))?"vtt":"srt",
-          default:!!s.default,
-          headers:HEADERS
+          language:s.language||"en"
         }))
         .filter(s=>s.url);
       return{masterUrl:String(d.src).replace(/\\/g,""),subtitles}
@@ -266,10 +263,7 @@ function parseVidstack(html){
     if(u&&(kind==="subtitles"||kind==="captions"||/\.(ass|vtt)(?:\?|$)/i.test(u)))subtitles.push({
       url:u,
       name:attr(t,"label")||"English",
-      language:attr(t,"srclang")||"en",
-      format:/\.ass(?:[?#]|$)/i.test(u)?"ass":/\.vtt(?:[?#]|$)/i.test(u)?"vtt":"srt",
-      default:String(attr(t,"default")||"").length>0,
-      headers:HEADERS
+      language:attr(t,"srclang")||"en"
     })
   }
   return{masterUrl,subtitles}
@@ -505,8 +499,6 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
       url:parsed.masterUrl,
       quality:"Multi",
       headers:HEADERS,
-      subtitle:(parsed.subtitles&&parsed.subtitles[0]&&parsed.subtitles[0].url)||"",
-      subtitleFormat:(parsed.subtitles&&parsed.subtitles[0]&&parsed.subtitles[0].format)||"",
       subtitles:parsed.subtitles||[]
     })
   }
@@ -590,8 +582,6 @@ async function resolveStream(tmdbId,mediaType,season,episode,settings){
                 url:p.masterUrl,
                 quality:"Multi",
                 headers:HEADERS,
-                subtitle:((p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles)||[])[0]?.url||"",
-                subtitleFormat:((p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles)||[])[0]?.format||"",
                 subtitles:p.subtitles&&p.subtitles.length?p.subtitles:parsed.subtitles||[]
               }
             }
