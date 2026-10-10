@@ -196,6 +196,31 @@ async function mapperLookup(tmdbId,season,episode){
   }
 }
 
+
+/* Explicit identifier contract: plain numeric IDs remain TMDB IDs; use mal:12345
+   (or {mal_id:12345}) when the supplied identifier is from MyAnimeList. */
+function parseAnimeIdentifier(value){
+  if(value&&typeof value==="object"){
+    const mal=value.mal_id??value.malId??(String(value.idType||value.id_type||"").toLowerCase()==="mal"?value.id:null);
+    if(mal!=null&&/^\d{1,10}$/.test(String(mal).trim())&&Number(mal)>0)return{kind:"mal",id:String(mal).trim()};
+    const tmdb=value.tmdb_id??value.tmdbId??value.id;
+    return tmdb==null?{kind:"invalid",id:""}:{kind:"tmdb",id:String(tmdb).trim()};
+  }
+  const raw=String(value||"").trim(),m=raw.match(/^(?:mal|mal_id|malid)\s*[:#/]\s*(\d{1,10})$/i);
+  if(m&&Number(m[1])>0)return{kind:"mal",id:m[1]};
+  return raw?{kind:"tmdb",id:raw}:{kind:"invalid",id:""};
+}
+async function malMetadata(malId,episode){
+  const info=await memo("anikoto:malmeta:"+malId,21600000,async()=>{
+    const d=await getJson("https://api.jikan.moe/v4/anime/"+encodeURIComponent(malId)+"/full",{headers:{"Accept":"application/json","User-Agent":UA}},6000);
+    const a=d&&d.data;if(!a||String(a.mal_id||"")!==String(malId))return null;
+    const titles=[a.title_english,a.title,a.title_japanese,...(Array.isArray(a.title_synonyms)?a.title_synonyms:[]),...(Array.isArray(a.titles)?a.titles.map(x=>x&&x.title):[])].filter(Boolean).map(String);
+    return{malId:String(malId),title:String(a.title_english||a.title||a.title_japanese||""),titles:[...new Set(titles)],episodes:Number(a.episodes)||0};
+  });
+  const ep=Number(episode);if(!info||!Number.isInteger(ep)||ep<1||(info.episodes>0&&ep>info.episodes))return null;
+  return{malId:info.malId,malEpisode:ep,title:info.title,titles:info.titles,seasonName:"",directMal:true};
+}
+
 /* ---------- Anikoto search / matching ---------- */
 function normalizeTitle(s){
   let x=String(s||"").toLowerCase().replace(/&/g,"and");
@@ -227,7 +252,7 @@ function cardScore(card,targets,base,season){
   }
   if(cb&&ct===cb)best=Math.max(best,900);
   const explicit=titleSeason(card.name);
-  if(explicit!==null){
+  if(season!==null&&season!==undefined&&explicit!==null){
     if(explicit===season)best+=150;
     else best-=1000
   }else if(season===1&&/\b(?:season|saison)\s*\d+\b/i.test(card.name))best-=700;
@@ -313,6 +338,10 @@ async function findAnime(mapping,season){
     .filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
   const best=scored[0];
   if(!best)return null;
+  if(scored.length>1&&scored[1].score===best.score){
+    log("AMBIGUOUS ANIME MATCH topScore="+best.score+" candidates="+scored.filter(x=>x.score===best.score).length);
+    return null
+  }
   log("ANIME MATCH "+best.c.name+" score="+best.score);
   return best.c
 }
@@ -848,24 +877,25 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
   try{
     const type=String(mediaType||"tv").toLowerCase();
     if(type!=="tv")return[];
-    const id=String(tmdbId||"").trim(),s=Number(season)||1,e=Number(episode)||1;
-    if(!id)return[];
-    const key="anikoto:streams:"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
+    const identifier=parseAnimeIdentifier(tmdbId),id=identifier.id,s=Number(season)||1,e=Number(episode)||1;
+    if(!id||identifier.kind==="invalid")return[];
+    if(identifier.kind==="mal"&&!/^\d{1,10}$/.test(id))return[];
+    const key="anikoto:streams:"+identifier.kind+":"+id+":"+s+":"+e+":"+JSON.stringify(settings||{});
     const hit=CACHE.get(key);
     if(hit!==undefined)return await Promise.resolve(hit);
     const p=(async()=>{
       const started=Date.now();
-      log("REQUEST TMDB="+id+" S"+s+"E"+e);
+      log("REQUEST "+identifier.kind.toUpperCase()+"="+id+" S"+s+"E"+e);
       const mapperStarted=Date.now();
-      const mapping=await mapperLookup(id,s,e);
-      log("MAPPER "+(Date.now()-mapperStarted)+"ms");
+      const mapping=identifier.kind==="mal"?await malMetadata(id,e):await mapperLookup(id,s,e);
+      log((identifier.kind==="mal"?"MAL METADATA ":"MAPPER ")+(Date.now()-mapperStarted)+"ms");
       if(!mapping){
-        log("MAPPING MISS — READ ONLY, NO POPULATION");
+        log(identifier.kind==="mal"?"MAL ID OR EPISODE NOT FOUND":"MAPPING MISS — READ ONLY, NO POPULATION");
         return[]
       }
       log("MAPPING HIT MAL="+mapping.malId+" E"+mapping.malEpisode);
       const searchStarted=Date.now();
-      const anime=findAnime(mapping,s);
+      const anime=findAnime(mapping,identifier.kind==="mal"?null:s);
       const modesList=modes(settings);
       const [animeResult]=await Promise.all([anime]);
       log("SEARCH/MATCH TOTAL "+(Date.now()-searchStarted)+"ms");
@@ -877,7 +907,9 @@ async function getStreams(tmdbId,mediaType="tv",season=1,episode=1,settings={}){
       const animeId=await getAnimeId(animeUrl);
       if(!animeId)return[];
       const episodes=await getEpisodes(animeId);
-      let episodeMatch=episodes.find(x=>x.episodeNumber===mapping.malEpisode);
+      let episodeMatch=mapping.directMal
+        ?episodes.find(x=>x.episodeNumber===mapping.malEpisode)||episodes.find(x=>Number(x.malId)===mapping.malEpisode)
+        :episodes.find(x=>Number(x.malId)===mapping.malEpisode)||episodes.find(x=>x.episodeNumber===mapping.malEpisode);
       if(!episodeMatch){
         log("EPISODE MATCH FAILED MAL E"+mapping.malEpisode);
         return[]
